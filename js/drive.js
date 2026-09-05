@@ -5,8 +5,8 @@
 
 import { stepCar, MAX_SPEED_ON_ROAD, MAX_SPEED_OFF_ROAD, VEHICLE_CLASSES, giveNitro } from "./car.js";
 import {
-  ROAD_HALF_WIDTH_M, OFFROAD_MARGIN_M, signalPhase,
-  HAZARD_RADIUS_M, NITRO_RADIUS_M, NITRO_RESPAWN_MS, NITRO_BOOST_SECONDS,
+  ROAD_HALF_WIDTH_M, OFFROAD_MARGIN_M,
+  NITRO_RADIUS_M, NITRO_RESPAWN_MS, NITRO_BOOST_SECONDS,
 } from "./roads.js";
 import {
   saveRace, findBest, saveRoute, getGhost, saveGhostIfBest, getCollectedIds, markCollected,
@@ -70,7 +70,7 @@ let carSprite = null;
 
 const MINIMAP_MARGIN = 20;
 const MINIMAP_RADIUS_PX = 144;
-const MINIMAP_METERS = 300; // real-world radius shown on the minimap (2x zoomed out from the original 150m)
+const MINIMAP_METERS = 600; // real-world radius shown on the minimap (4x zoomed out from the original 150m)
 
 let raf = null;
 let keysDown = new Set();
@@ -207,7 +207,6 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   let recordedPath = [];
   let lastSampleT = -Infinity;
   let wasColliding = false;
-  let wasHazardColliding = false;
 
   const collectedIds = getCollectedIds();
   const collectables = projectCollectables(roadData).filter(c => !collectedIds.has(c.id));
@@ -560,67 +559,40 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.restore();
     }
 
-    // Roadworks (static — dodge them) and nitro canisters (respawning boost
-    // pickups), generated per-tile by roads.js — see stepGameplay()'s
-    // collision handling for the actual pickup/bump logic.
-    for (const hz of roadData.nearbyHazards(car.x, car.y)) {
-      const p = toScreen(hz.x, hz.y);
-      if (p.sx < -30 || p.sx > w + 30 || p.sy < -30 || p.sy > h + 30) continue;
-      ctx.save();
-      ctx.translate(p.sx, p.sy);
-      ctx.fillStyle = "#f0a83f";
-      ctx.beginPath();
-      ctx.moveTo(0, -9); ctx.lineTo(7, 7); ctx.lineTo(-7, 7); ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#1b232b";
-      ctx.fillRect(-4, 1, 8, 2);
-      ctx.restore();
-    }
+    // Nitro canisters (respawning boost pickups), generated per-tile by
+    // roads.js — see tick()'s collision handling for the actual pickup logic.
     for (const nt of roadData.nearbyNitros(car.x, car.y)) {
       if (performance.now() - nt.collectedAt < NITRO_RESPAWN_MS) continue; // picked up recently, waiting to respawn
       const p = toScreen(nt.x, nt.y);
-      if (p.sx < -30 || p.sx > w + 30 || p.sy < -30 || p.sy > h + 30) continue;
-      const pulse = 1 + Math.sin(bobT * 2 + nt.x) * 0.15;
+      if (p.sx < -45 || p.sx > w + 45 || p.sy < -45 || p.sy > h + 45) continue;
+      // High-contrast gold/yellow (rather than blue, which blends into roads
+      // and water in the satellite imagery) with a bright ring + soft glow
+      // and a bit of spin, so it reads clearly against any terrain.
+      const pulse = 1 + Math.sin(bobT * 2 + nt.x) * 0.18;
+      const spin = (performance.now() / 700 + nt.x) % (Math.PI * 2);
       ctx.save();
       ctx.translate(p.sx, p.sy);
       ctx.scale(pulse, pulse);
       ctx.beginPath();
-      ctx.fillStyle = "rgba(74,144,217,.35)";
-      ctx.arc(0, 0, 13, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,214,64,.28)";
+      ctx.arc(0, 0, 26, 0, Math.PI * 2);
       ctx.fill();
-      ctx.font = "18px sans-serif";
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(255,214,64,.55)";
+      ctx.arc(0, 0, 17, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.save();
+      ctx.rotate(spin);
+      ctx.strokeStyle = "#ffd640";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 17, 0, Math.PI * 1.4);
+      ctx.stroke();
+      ctx.restore();
+      ctx.font = "26px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText("⚡", 0, 1);
-      ctx.restore();
-    }
-
-    // Traffic signals — real timing isn't in OSM, so each one just cycles a
-    // deterministic green/yellow/red rhythm (see roads.js's signalPhase()).
-    // Stop signs render as a fixed octagon (no phase to show).
-    const nowMs = Date.now();
-    for (const sig of roadData.nearbySignals(car.x, car.y)) {
-      const p = toScreen(sig.x, sig.y);
-      if (p.sx < -30 || p.sx > w + 30 || p.sy < -30 || p.sy > h + 30) continue;
-      ctx.save();
-      ctx.translate(p.sx, p.sy);
-      if (sig.kind === "stop") {
-        ctx.fillStyle = "#ef5350";
-        ctx.beginPath();
-        for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * Math.PI * 2;
-          const px = Math.cos(a) * 6, py = Math.sin(a) * 6;
-          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-        }
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        const phase = signalPhase(sig, nowMs);
-        ctx.fillStyle = phase === "green" ? "#35c37a" : phase === "yellow" ? "#f0a83f" : "#ef5350";
-        ctx.beginPath();
-        ctx.arc(0, 0, 5, 0, Math.PI * 2);
-        ctx.fill();
-      }
       ctx.restore();
     }
 
@@ -1012,18 +984,6 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
           if (!wasColliding) audio.playBump();
         }
         wasColliding = anyCollision;
-
-        // Roadworks: a firm bump (speed killed, no crash) rather than a fatal
-        // hit — they're static clutter to dodge, not traffic.
-        let anyHazard = false;
-        for (const hz of roadData.nearbyHazards(car.x, car.y)) {
-          if (Math.hypot(car.x - hz.x, car.y - hz.y) < CAR_HITBOX_RADIUS_M + HAZARD_RADIUS_M) { anyHazard = true; break; }
-        }
-        if (anyHazard) {
-          car.speed *= 0.3;
-          if (!wasHazardColliding) audio.playBump();
-        }
-        wasHazardColliding = anyHazard;
 
         // Nitro: respawns after NITRO_RESPAWN_MS rather than vanishing for
         // the rest of the race, since it's a recurring resource, not loot.

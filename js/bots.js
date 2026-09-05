@@ -4,8 +4,6 @@
 // not a connected routing graph, so this is "looks alive" wandering rather
 // than real pathfinding — good enough for ambient traffic.
 
-import { signalPhase } from "./roads.js";
-
 // Bots drive offset to one side of the road centerline instead of straight
 // down the middle of it — a fixed lane, not a real left/right-hand-traffic
 // simulation (that would need per-country data OSM doesn't give us cheaply),
@@ -166,22 +164,6 @@ export function stepBots(bots, roadData, dt, playerPos, playerSpeed) {
   return honks > 0;
 }
 
-const SIGNAL_STOP_DIST_M = 18; // start braking for a red light/stop sign this far out
-const SIGNAL_NEAR_M = 10;      // how close a signal node must be to a segment endpoint to "belong" to it
-const STOP_SIGN_WAIT_S = 1.5;  // brief mandatory pause at a stop sign, independent of any signal cycle
-
-// Is there a red/yellow light or a stop sign at the upcoming end of this
-// segment? Real signal timing isn't in OSM (see signalPhase()), so this is
-// "looks alive" rather than a synced simulation of real intersections.
-function upcomingStopAt(roadData, x2, y2, nowMs) {
-  for (const sig of roadData.nearbySignals(x2, y2)) {
-    if (Math.hypot(sig.x - x2, sig.y - y2) > SIGNAL_NEAR_M) continue;
-    if (sig.kind === "stop") return "stop";
-    if (sig.kind === "signal" && signalPhase(sig, nowMs) !== "green") return "signal";
-  }
-  return null;
-}
-
 function stepBot(bot, roadData, dt) {
   if (bot.speedBoost !== 0) bot.speedBoost *= Math.exp(-dt / SPEED_BOOST_DECAY_TAU_S);
 
@@ -192,40 +174,18 @@ function stepBot(bot, roadData, dt) {
     return;
   }
 
+  const diff = (bot.speedTarget + bot.speedBoost) - bot.speed;
+  bot.speed += Math.sign(diff) * Math.min(Math.abs(diff), bot.accel * dt);
+
   const seg = bot.seg;
   const x1 = bot.dir === 1 ? seg.x1 : seg.x2, y1 = bot.dir === 1 ? seg.y1 : seg.y2;
   const x2 = bot.dir === 1 ? seg.x2 : seg.x1, y2 = bot.dir === 1 ? seg.y2 : seg.y1;
   const segLen = Math.hypot(x2 - x1, y2 - y1) || 1;
-  const distToEnd = (1 - bot.t) * segLen;
-
-  let targetSpeed = bot.speedTarget + bot.speedBoost;
-  let mustHold = false;
-  if (distToEnd < SIGNAL_STOP_DIST_M) {
-    const stopKind = upcomingStopAt(roadData, x2, y2, Date.now());
-    if (stopKind === "signal") {
-      targetSpeed = 0;
-      mustHold = true;
-    } else if (stopKind === "stop") {
-      targetSpeed = 0;
-      if (distToEnd < 2) {
-        if (bot.stopWaitUntil == null) bot.stopWaitUntil = Date.now() + STOP_SIGN_WAIT_S * 1000;
-        mustHold = Date.now() < bot.stopWaitUntil;
-      }
-    }
-    if (stopKind !== "stop" || distToEnd >= 2) bot.stopWaitUntil = null;
-  } else {
-    bot.stopWaitUntil = null;
-  }
-
-  const diff = targetSpeed - bot.speed;
-  bot.speed += Math.sign(diff) * Math.min(Math.abs(diff), bot.accel * dt);
-
   bot.t += (bot.speed * dt) / segLen;
-  if (mustHold) bot.t = Math.min(bot.t, 1 - 1.5 / segLen); // hold just short of the stop line
 
   if (bot.t >= 1) {
     const next = pickSegmentNear(roadData, x2, y2, seg);
-    if (next) { Object.assign(bot, initOnSegment(next, x2, y2, bot.speedTarget, bot.accel)); }
+    if (next) Object.assign(bot, initOnSegment(next, x2, y2, bot.speedTarget, bot.accel));
     else bot.t = 1; // stuck at the end until a nearby segment loads
     return;
   }
