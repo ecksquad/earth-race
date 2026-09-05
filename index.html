@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0b1016">
+<title>EARTH RACE</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --bg:#040608; --panel:#10151b; --panel2:#0a0e13; --ink:#eef3f7; --muted:#8695a3; --faint:#55636f;
+    --line:#1b232b; --accent:#33e0c2; --accent-soft:rgba(51,224,194,.14); --accent-ink:#022420;
+    --good:#35c37a; --good-soft:rgba(53,195,122,.15); --warn:#f0a83f; --warn-soft:rgba(240,168,63,.15);
+    --bad:#ef5350; --bad-soft:rgba(239,83,80,.15); --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  @media (prefers-color-scheme:light){
+    :root{ --bg:#eef2f5; --panel:#ffffff; --panel2:#f4f7f9; --ink:#101820; --muted:#5b6b78; --faint:#8b98a3;
+      --line:#dde4ea; --accent:#0e9c86; --accent-soft:#e1f5f1; --accent-ink:#ffffff;
+      --good:#1f9c5d; --good-soft:#e3f7ec; --warn:#c67c14; --warn-soft:#fbedd9;
+      --bad:#d8433f; --bad-soft:#fbe4e3; --shadow:0 1px 2px rgba(20,30,40,.05),0 8px 24px rgba(20,30,40,.07); }
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,ui-sans-serif,system-ui,sans-serif;}
+  body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+  header{padding:10px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,var(--panel2),var(--panel))}
+  header h1{font-size:15px;letter-spacing:.14em;margin:0;font-weight:700;color:var(--accent);
+    text-shadow:0 0 18px var(--accent-soft)}
+  header .sub{font-size:12px;color:var(--muted)}
+  #online-badge{margin-left:auto;display:none;align-items:center;font-size:12px;color:var(--good);
+    font-variant-numeric:tabular-nums}
+  #online-badge.show{display:inline-flex}
+  #mute-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+    border-radius:20px;padding:7px 12px;font-size:14px;cursor:pointer;transition:border-color .15s ease, transform .1s ease}
+  #mute-btn:hover{border-color:var(--accent);transform:translateY(-1px)}
+  #collectables-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+    border-radius:20px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;
+    transition:border-color .15s ease, transform .1s ease}
+  #collectables-btn:hover{border-color:var(--warn);transform:translateY(-1px)}
+  #collect-progress{color:var(--warn);font-variant-numeric:tabular-nums}
+
+  .screen{flex:1;min-height:0;display:none;position:relative}
+  .screen.active{display:flex;flex-direction:column}
+
+  /* --- picker screen --- */
+  #map{flex:1;min-height:0}
+  #picker-panel{padding:12px 16px;background:var(--panel);border-top:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  #picker-panel .hint{font-size:13px;color:var(--muted);flex:1 1 100%}
+  .dist-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;
+    padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:border-color .15s ease,transform .1s ease}
+  .dist-btn:hover{border-color:var(--accent);transform:translateY(-1px)}
+  .dist-btn.selected{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  #custom-km{width:96px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;padding:9px 14px;font-size:13px}
+  #go-btn{background:var(--accent);color:var(--accent-ink);border:none;border-radius:20px;padding:10px 22px;
+    font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px var(--accent-soft);transition:transform .1s ease}
+  #go-btn:hover:not(:disabled){transform:translateY(-1px)}
+  #go-btn:disabled{opacity:.4;cursor:default;box-shadow:none}
+  #save-route-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;
+    padding:9px 16px;font-size:13px;cursor:pointer}
+  #save-route-btn:disabled{opacity:.4;cursor:default}
+  #picker-status{font-size:12px;color:var(--warn)}
+  #saved-routes{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px}
+  #saved-routes:empty{display:none}
+  .route-chip{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:6px 8px 6px 12px;font-size:12px;color:var(--ink);cursor:pointer}
+  .route-chip:hover{border-color:var(--accent)}
+  .route-chip button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px}
+  .route-chip button:hover{color:var(--bad)}
+
+  /* --- drive screen --- */
+  /* Prevent native pinch-zoom/pan on touch devices — the picker screen's
+     Leaflet map handles its own touch gestures internally, but the drive
+     screen has no such handling, so an unclaimed pinch here falls through to
+     the browser's page-zoom, which visually scales+pans the whole canvas
+     (HUD/minimap included) instead of doing anything useful in a driving game. */
+  #screen-drive{touch-action:none}
+  #gamecanvas{flex:1;min-height:0;display:block;width:100%;height:100%;background:#2b2f33}
+  #hud{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;
+    pointer-events:none;font-variant-numeric:tabular-nums}
+  .hud-box{background:rgba(10,14,19,.72);color:#eef3f7;border:1px solid rgba(255,255,255,.08);
+    border-radius:12px;padding:12px 18px;font-size:20px;line-height:1.5}
+  #offroad-badge{background:var(--bad-soft);color:var(--bad);font-weight:700;border-radius:9px;
+    padding:3px 12px;font-size:17px;letter-spacing:.06em;display:none}
+  #offroad-badge.show{display:inline-block}
+  #back-btn{position:absolute;bottom:14px;right:14px;background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer}
+
+  #ghost-toggle-wrap{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:none;
+    align-items:center;gap:10px;background:rgba(10,14,19,.72);color:#eef3f7;border:1px solid rgba(255,255,255,.1);
+    border-radius:10px;padding:8px 14px;font-size:13px}
+  #ghost-toggle-wrap.show{display:flex}
+  #ghost-toggle-wrap label{display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;white-space:nowrap}
+  #ghost-toggle-wrap input{cursor:pointer}
+  #import-ghost-btn{background:rgba(255,255,255,.08);color:#eef3f7;border:1px solid rgba(255,255,255,.15);
+    border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+  #import-ghost-btn:hover{border-color:var(--accent)}
+
+  #landmark-banner{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:none;
+    background:rgba(240,168,63,.16);color:var(--warn);border:1px solid rgba(240,168,63,.4);
+    border-radius:10px;padding:8px 16px;font-size:13px;font-weight:600;white-space:nowrap}
+  #landmark-banner.show{display:block}
+  /* When both the landmark banner and ghost toggle are visible, stack the
+     toggle below the banner instead of overlapping it. */
+  #landmark-banner.show ~ #ghost-toggle-wrap{top:56px}
+
+  #copy-ghost-btn{display:none}
+  #copy-ghost-btn.show{display:inline-block}
+
+  #collect-toast{position:absolute;top:70px;left:50%;transform:translateX(-50%) translateY(-12px);
+    display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:10px 18px;box-shadow:var(--shadow);opacity:0;pointer-events:none;
+    transition:opacity .3s ease,transform .3s ease}
+  #collect-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #collect-toast-icon{font-size:30px;filter:drop-shadow(0 0 8px rgba(255,255,255,.5))}
+  #collect-toast-name{font-weight:700;font-size:14px;color:var(--ink)}
+  #collect-toast-rarity{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+
+  /* Leaflet's internal map panes use z-index up to ~700 (see .leaflet-*-pane)
+     and neither .screen nor .leaflet-container establish their own stacking
+     context, so those panes compare directly against page-level UI in the
+     shared root stacking context — a low z-index here would let the map
+     paint straight through this overlay despite DOM order. */
+  #collectables-modal{position:fixed;inset:0;background:rgba(4,6,8,.75);display:none;align-items:center;
+    justify-content:center;z-index:9000;padding:24px}
+  #collectables-modal.show{display:flex}
+  #collectables-modal .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    width:min(920px,100%);max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow);overflow:hidden}
+  #collectables-modal .modal-head{display:flex;align-items:center;gap:14px;padding:16px 20px;
+    border-bottom:1px solid var(--line);flex-wrap:wrap}
+  #collectables-modal h2{margin:0;font-size:16px;color:var(--accent)}
+  #modal-progress{font-size:13px;color:var(--muted)}
+  #modal-progress b{color:var(--warn)}
+  .modal-filters{display:flex;gap:6px;margin-left:auto}
+  .filter-btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:8px;
+    padding:6px 12px;font-size:12px;cursor:pointer}
+  .filter-btn.selected{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  #collectables-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:2px 8px;line-height:1}
+  #collectables-close:hover{color:var(--bad)}
+  #collectables-grid{overflow-y:auto;padding:16px 20px;display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(48px,1fr));gap:8px}
+  .collect-tile{aspect-ratio:1;border-radius:10px;display:flex;align-items:center;justify-content:center;
+    font-size:20px;background:var(--panel2);border:1px solid var(--line);opacity:.32;cursor:default}
+  .collect-tile.found{opacity:1}
+  .collect-rarity-legend{display:flex;gap:14px;padding:0 20px 14px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+  .collect-rarity-legend span{display:inline-flex;align-items:center;gap:5px}
+  .collect-rarity-legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  #result{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(4,6,8,.72)}
+  #result.show{display:flex}
+  #result .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:24px 28px;text-align:center;min-width:260px;box-shadow:var(--shadow)}
+  #result h2{margin:0 0 6px;color:var(--accent);font-size:18px}
+  #result .time{font-size:32px;font-weight:700;margin:10px 0}
+  #result .best{font-size:13px;color:var(--muted);margin-bottom:16px}
+  #result button{background:var(--accent);color:var(--accent-ink);border:none;border-radius:8px;
+    padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer;margin:0 4px}
+  #save-this-route-btn{background:var(--panel2)!important;color:var(--ink)!important;border:1px solid var(--line)!important}
+  #save-this-route-btn:disabled{opacity:.4;cursor:default}
+  #copy-ghost-btn{background:var(--panel2)!important;color:var(--ink)!important;border:1px solid var(--line)!important}
+</style>
+</head>
+<body>
+  <header>
+    <h1>EARTH RACE</h1>
+    <span class="sub">drive the real world, on the roads — WASD / arrow keys / gamepad</span>
+    <span id="online-badge" title="Other players currently driving, anywhere on Earth">👥 0 online</span>
+    <button id="mute-btn" title="Mute/unmute sound">🔊</button>
+    <button id="collectables-btn" title="View all collectables">🏆 <span id="collect-progress">0 / 1000</span></button>
+  </header>
+
+  <section id="screen-picker" class="screen active">
+    <div id="map"></div>
+    <div id="picker-panel">
+      <div class="hint">Click the map to drop your start point, then pick a distance.</div>
+      <button class="dist-btn" data-km="1">1 km</button>
+      <button class="dist-btn" data-km="10">10 km</button>
+      <button class="dist-btn" data-km="100">100 km</button>
+      <button class="dist-btn" data-km="1000">1000 km</button>
+      <input id="custom-km" type="number" min="0.1" step="0.1" placeholder="custom km">
+      <button id="go-btn" disabled>Start Race</button>
+      <button id="save-route-btn" disabled title="Set an exact end point to save this route">Save route</button>
+      <span id="picker-status"></span>
+      <div id="saved-routes"></div>
+    </div>
+  </section>
+
+  <section id="screen-drive" class="screen">
+    <canvas id="gamecanvas"></canvas>
+    <div id="hud">
+      <div class="hud-box">
+        TIME <span id="hud-time">00:00.0</span><br>
+        SPEED <span id="hud-speed">0</span> km/h
+        <span id="offroad-badge">OFF ROAD</span>
+      </div>
+      <div class="hud-box">
+        TO GO <span id="hud-remaining">–</span> km<br>
+        BEST <span id="hud-best">–</span>
+      </div>
+    </div>
+    <button id="back-btn">&larr; Back to map</button>
+    <div id="landmark-banner"></div>
+    <div id="ghost-toggle-wrap">
+      <label>
+        <input type="checkbox" id="ghost-toggle">
+        <span id="ghost-toggle-label">👻 Show ghost (best time)</span>
+      </label>
+      <button id="import-ghost-btn" title="Race a friend's ghost code">📥 Import</button>
+    </div>
+    <div id="collect-toast">
+      <span id="collect-toast-icon"></span>
+      <div>
+        <div id="collect-toast-name"></div>
+        <div id="collect-toast-rarity"></div>
+      </div>
+    </div>
+    <div id="result">
+      <div class="card">
+        <h2 id="result-heading">Finished!</h2>
+        <div class="time" id="result-time">00:00.0</div>
+        <div class="best" id="result-best"></div>
+        <button id="save-this-route-btn">Save this route</button>
+        <button id="copy-ghost-btn">📋 Copy ghost code</button>
+        <button id="race-again-btn">Race again</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="collectables-modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>🏆 Collectables</h2>
+        <span id="modal-progress"></span>
+        <div class="modal-filters">
+          <button class="filter-btn selected" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="found">Found</button>
+          <button class="filter-btn" data-filter="missing">Missing</button>
+        </div>
+        <button id="collectables-close" title="Close">✕</button>
+      </div>
+      <div class="collect-rarity-legend">
+        <span><i style="background:rgb(142,153,163)"></i>Common</span>
+        <span><i style="background:rgb(53,195,122)"></i>Uncommon</span>
+        <span><i style="background:rgb(74,144,217)"></i>Rare</span>
+        <span><i style="background:rgb(168,85,247)"></i>Epic</span>
+        <span><i style="background:rgb(240,168,63)"></i>Legendary</span>
+      </div>
+      <div id="collectables-grid"></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
