@@ -12,6 +12,12 @@ const SKIN_LABELS = {
   chrome: "Chrome", "matte-black": "Matte Black", flame: "Flame",
 };
 
+// Bike/truck exist as tuned handling profiles (see car.js's VEHICLE_CLASSES)
+// but aren't released yet — shown so people know they're coming, not
+// selectable so nobody's mid-race handling changes out from under them
+// later when they do actually ship.
+const RELEASED_VEHICLE_CLASSES = ["car"];
+
 export function initGarageUI() {
   const btn = document.getElementById("garage-btn");
   const modal = document.getElementById("garage-modal");
@@ -26,11 +32,18 @@ export function initGarageUI() {
 
     classesEl.innerHTML = "";
     for (const [id, vc] of Object.entries(VEHICLE_CLASSES)) {
+      const isReleased = RELEASED_VEHICLE_CLASSES.includes(id);
       const card = document.createElement("button");
-      card.className = "garage-option" + (garage.vehicleClass === id ? " selected" : "");
-      card.innerHTML = `<div class="garage-option-title">${vc.label}</div>
-        <div class="garage-option-sub">speed ${Math.round(vc.speedMul * 100)}% · accel ${Math.round(vc.accelMul * 100)}% · turn ${Math.round(vc.turnMul * 100)}%</div>`;
-      card.addEventListener("click", () => { setGarage({ vehicleClass: id }); render(); });
+      card.className = "garage-option" + (garage.vehicleClass === id ? " selected" : "") + (isReleased ? "" : " locked");
+      if (isReleased) {
+        card.innerHTML = `<div class="garage-option-title">${vc.label}</div>
+          <div class="garage-option-sub">speed ${Math.round(vc.speedMul * 100)}% · accel ${Math.round(vc.accelMul * 100)}% · turn ${Math.round(vc.turnMul * 100)}%</div>`;
+        card.addEventListener("click", () => { setGarage({ vehicleClass: id }); render(); });
+      } else {
+        card.innerHTML = `<div class="garage-option-title">🚧 ${vc.label}</div>
+          <div class="garage-option-sub">Coming soon</div>`;
+        card.disabled = true;
+      }
       classesEl.appendChild(card);
     }
 

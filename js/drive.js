@@ -222,7 +222,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // storage.js/achievements.js) — purely handling stats + a sprite tint/scale,
   // not new art.
   const garage = getGarage();
-  const vehicleClass = VEHICLE_CLASSES[garage.vehicleClass] ? garage.vehicleClass : "car";
+  // Only "car" is actually released (see garageUI.js's RELEASED_VEHICLE_CLASSES)
+  // — bike/truck exist as tuned stats for later, so any stored selection
+  // other than car (e.g. left over from pre-release testing) is ignored
+  // rather than silently applying an unreleased handling profile.
+  const vehicleClass = "car";
 
   // Lifetime stats/achievements: driftSeconds/topSpeedKmh/nitroUses accumulate
   // through the race and get folded into storage.js's running totals on

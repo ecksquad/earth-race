@@ -4,7 +4,7 @@
 // (Firebase) all need to be genuinely live to be useful, so those are never
 // intercepted here, only same-origin shell files.
 
-const CACHE_NAME = "earthrace-shell-v1";
+const CACHE_NAME = "earthrace-shell-v2";
 const SHELL_FILES = [
   "./",
   "index.html",
@@ -33,7 +33,25 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return; // let Overpass/Firebase/Esri requests pass through untouched
+
+  // Network-first for the app's own code/HTML, so a shipped update is
+  // visible the moment you're back online — the cache here is purely an
+  // offline fallback, never a "prefer the old version" strategy (an earlier
+  // cache-first version of this file kept serving stale JS after deploys
+  // until a page fully reloaded past the old service worker). Large static
+  // binary assets (sprite/audio/icons) are the one exception: those don't
+  // change without a full redeploy, so cache-first for those is free
+  // performance, not staleness risk.
+  const isStaticAsset = url.pathname.includes("/assets/");
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).catch(() => cached))
+    isStaticAsset
+      ? caches.match(event.request).then((cached) => cached || fetch(event.request))
+      : fetch(event.request)
+          .then((res) => {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+            return res;
+          })
+          .catch(() => caches.match(event.request))
   );
 });

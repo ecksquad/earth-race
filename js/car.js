@@ -29,6 +29,16 @@ const MAX_DRIFT_ANGLE = 55 * Math.PI / 180;    // cap on how far travel directio
 const DRIFT_SPEED_REF = 12; // m/s
 const HANDBRAKE_DECEL = 14; // m/s^2 extra deceleration while the handbrake is held
 
+// Leaving the road surface loses grip, not just top speed — a continuous
+// drift-intensity boost while off-road (scaled by speed, same as steering-
+// induced drift) plus a one-time random yaw kick at the exact instant you
+// leave the tarmac, so it reads as spinning out rather than just gently
+// slowing down. The kick leans the same way you're already steering (a hard
+// turn onto grass throws you further into the spin) if you're turning at
+// all, otherwise it's a coin flip.
+const OFFROAD_GRIP_LOSS = 0.55;
+const OFFROAD_SPIN_KICK = 35 * Math.PI / 180;
+
 // Vehicle classes reuse the same sprite (tinted/rescaled in drive.js) with
 // different handling stats — a cheap way to get a "bike" and "truck" without
 // new art. Multipliers apply on top of the car/road-surface constants above.
@@ -86,10 +96,24 @@ export function stepCar(car, input, dt, onRoad, vehicleClass = "car") {
   }
 
   const speedFactor = Math.min(1, Math.abs(car.speed) / DRIFT_SPEED_REF);
-  // Handbrake locks the rear wheels regardless of throttle — always maximum
-  // drift bias while held, same as a real handbrake turn.
-  const brakeFactor = input.handbrake ? 1 : input.throttle < 0 ? 1 : input.throttle === 0 ? 0.85 : 0;
-  const driftIntensity = Math.abs(input.steer) * speedFactor * brakeFactor;
+
+  // Spin-out kick: only on the exact frame grip changes from road to
+  // off-road, scaled by how fast you were going when you left it.
+  if (car.wasOnRoad === undefined) car.wasOnRoad = onRoad;
+  if (car.wasOnRoad && !onRoad) {
+    const kickDir = input.steer !== 0 ? Math.sign(input.steer) : (Math.random() < 0.5 ? 1 : -1);
+    car.heading += kickDir * OFFROAD_SPIN_KICK * speedFactor * (0.5 + Math.random() * 0.5);
+  }
+  car.wasOnRoad = onRoad;
+
+  // Cornering hard enough at real speed drifts regardless of throttle state —
+  // handbrake/braking still push it further (full lock-up bias), but flat-out
+  // accelerating through a tight corner now slides too instead of needing to
+  // lift off first.
+  const brakeFactor = input.handbrake ? 1 : input.throttle < 0 ? 1 : 0.85;
+  const steerDrift = Math.abs(input.steer) * speedFactor * brakeFactor;
+  const offRoadDrift = onRoad ? 0 : OFFROAD_GRIP_LOSS * speedFactor;
+  const driftIntensity = Math.min(1, steerDrift + offRoadDrift);
   const catchUpRate = GRIP_RATE * Math.max(0.06, 1 - driftIntensity); // never fully zero, so it always recovers
 
   let diff = normalizeAngle(car.heading - car.velHeading);
