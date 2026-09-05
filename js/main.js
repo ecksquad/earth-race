@@ -72,11 +72,19 @@ refreshMuteBtn();
 
 const onlineBadge = document.getElementById("online-badge");
 if (isMultiplayerAvailable()) {
+  // Auto-generate a name instead of blocking page load with a prompt() — the
+  // badge itself is clickable any time to pick something else.
   if (!getPlayerName()) {
-    const name = window.prompt("Pick a name other drivers will see you as:", "Driver");
-    setPlayerName((name || "Driver").trim().slice(0, 20) || "Driver");
+    setPlayerName(`Driver${Math.floor(1000 + Math.random() * 9000)}`);
   }
   onlineBadge.classList.add("show");
+  onlineBadge.title = `You're "${getPlayerName()}" — click to change your name`;
+  onlineBadge.addEventListener("click", () => {
+    const name = window.prompt("Pick a name other drivers will see you as:", getPlayerName());
+    if (name === null) return; // cancelled
+    setPlayerName(name.trim().slice(0, 20) || "Driver");
+    onlineBadge.title = `You're "${getPlayerName()}" — click to change your name`;
+  });
   connectMultiplayer().then((ok) => {
     if (!ok) onlineBadge.classList.remove("show");
   });
