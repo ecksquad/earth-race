@@ -22,22 +22,26 @@ const TURN_RATE = 2.6;                 // rad/s at full steer and speed
 // or off the wheel. MAX_DRIFT_ANGLE caps how far that slip can build up so a
 // sustained hard drift settles into a steady slide instead of spinning out.
 const GRIP_RATE = 14;                          // rad/s, travel-direction catch-up rate at full grip
-const MAX_DRIFT_ANGLE = 55 * Math.PI / 180;    // cap on how far travel direction can lag facing direction
+const MAX_DRIFT_ANGLE = 65 * Math.PI / 180;    // cap on how far travel direction can lag facing direction
 // Drift intensity is scaled against a realistic cornering speed, NOT MAX_SPEED_ON_ROAD (300 km/h) —
 // scaling against the car's top speed made any normal 40-80 km/h corner only 15-25% "fast enough",
-// so the effect rounded down to nothing. 12 m/s (~43 km/h) is a speed you'd actually brake for a corner at.
-const DRIFT_SPEED_REF = 12; // m/s
+// so the effect rounded down to nothing. 9 m/s (~32 km/h) is a speed you'd corner at in a normal
+// neighborhood, not just a highway on-ramp — drift should be a regular part of cornering, not a
+// rare highway-speed event.
+const DRIFT_SPEED_REF = 9; // m/s
 const HANDBRAKE_DECEL = 14; // m/s^2 extra deceleration while the handbrake is held
 
-// Leaving the road surface loses grip, not just top speed — a continuous
-// drift-intensity boost while off-road (scaled by speed, same as steering-
-// induced drift) plus a one-time random yaw kick at the exact instant you
-// leave the tarmac, so it reads as spinning out rather than just gently
-// slowing down. The kick leans the same way you're already steering (a hard
-// turn onto grass throws you further into the spin) if you're turning at
-// all, otherwise it's a coin flip.
-const OFFROAD_GRIP_LOSS = 0.55;
+// Leaving the road surface loses grip hard, not just top speed — a big
+// continuous drift-intensity boost while off-road (scaled by speed, same as
+// steering-induced drift) means the back end is basically always sliding out
+// there, PLUS continuous random yaw jitter every frame (the tail stepping out
+// unpredictably, not settling into one clean slide like a controlled steering
+// drift does) on top of a one-time kick at the instant you leave the tarmac.
+// Net effect: off-road reads as genuinely losing the car, not a gentle
+// speed-capped detour.
+const OFFROAD_GRIP_LOSS = 0.9;
 const OFFROAD_SPIN_KICK = 35 * Math.PI / 180;
+const OFFROAD_JITTER_RATE = 9; // rad/s scale of continuous random yaw noise while off-road
 
 // Vehicle classes reuse the same sprite (tinted/rescaled in drive.js) with
 // different handling stats — a cheap way to get a "bike" and "truck" without
@@ -106,15 +110,21 @@ export function stepCar(car, input, dt, onRoad, vehicleClass = "car") {
   }
   car.wasOnRoad = onRoad;
 
+  if (!onRoad && speedFactor > 0.05) {
+    car.heading += (Math.random() - 0.5) * OFFROAD_JITTER_RATE * speedFactor * dt;
+  }
+
   // Cornering hard enough at real speed drifts regardless of throttle state —
   // handbrake/braking still push it further (full lock-up bias), but flat-out
   // accelerating through a tight corner now slides too instead of needing to
-  // lift off first.
-  const brakeFactor = input.handbrake ? 1 : input.throttle < 0 ? 1 : 0.85;
-  const steerDrift = Math.abs(input.steer) * speedFactor * brakeFactor;
+  // lift off first. steerCurve biases even a moderate (not full-lock) turn
+  // toward a meaningful drift instead of only rewarding max steer input.
+  const brakeFactor = input.handbrake ? 1 : input.throttle < 0 ? 1 : 0.95;
+  const steerCurve = Math.pow(Math.abs(input.steer), 0.5);
+  const steerDrift = steerCurve * speedFactor * brakeFactor;
   const offRoadDrift = onRoad ? 0 : OFFROAD_GRIP_LOSS * speedFactor;
   const driftIntensity = Math.min(1, steerDrift + offRoadDrift);
-  const catchUpRate = GRIP_RATE * Math.max(0.06, 1 - driftIntensity); // never fully zero, so it always recovers
+  const catchUpRate = GRIP_RATE * Math.max(0.04, 1 - driftIntensity * 1.6); // never fully zero, so it always recovers
 
   let diff = normalizeAngle(car.heading - car.velHeading);
   const maxCatch = catchUpRate * dt;
