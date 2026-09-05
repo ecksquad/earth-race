@@ -239,6 +239,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // drifting, faded out over SKID_MARK_LIFETIME_MS — purely cosmetic.
   let skidMarks = []; // { x, y, at }[]
   let lastSkidX = null, lastSkidY = null;
+  const remoteTrails = new Map(); // playerId -> [{x,y}] breadcrumb for other real players
 
   function newAchievementToast(ids) {
     for (const id of ids) {
@@ -315,6 +316,33 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   window.addEventListener("keyup", onKeyUp);
   watchDpr();
 
+  // Touch controls feed the exact same keysDown set the keyboard does (see
+  // readKeyboardInput) — no separate input plumbing needed. pointerdown/up
+  // (not touchstart/end) so the same buttons work with mouse/pen too, e.g. a
+  // touchscreen laptop that also has a trackpad.
+  const touchBindings = [
+    ["touch-left", "left"], ["touch-right", "right"],
+    ["touch-throttle", "up"], ["touch-brake", "down"],
+    ["touch-handbrake", "handbrake"],
+  ];
+  const touchCleanupFns = [];
+  for (const [id, key] of touchBindings) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const down = (e) => { e.preventDefault(); keysDown.add(key); };
+    const up = (e) => { e.preventDefault(); keysDown.delete(key); };
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    el.addEventListener("pointerleave", up);
+    touchCleanupFns.push(() => {
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      el.removeEventListener("pointerleave", up);
+    });
+  }
+
   function cleanup() {
     if (raf) cancelAnimationFrame(raf);
     raf = null;
@@ -324,6 +352,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     keysDown.clear();
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
+    touchCleanupFns.forEach(fn => fn());
     resizeObserver.disconnect();
     if (dprWatcher) dprWatcher.removeEventListener("change", onDprChange);
     backBtn.onclick = null;
@@ -671,8 +700,27 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     // Other real players (see multiplayer.js) — each broadcasts real-world
     // lat/lng, projected here into THIS race's local frame. Purely cosmetic:
     // no collision against them (see the startBroadcasting comment above).
-    for (const [, other] of getOthers()) {
+    // A short breadcrumb trail makes their motion read as continuous instead
+    // of stepping once per ~300ms broadcast.
+    const othersNow = getOthers();
+    for (const id of remoteTrails.keys()) if (!othersNow.has(id)) remoteTrails.delete(id);
+    for (const [id, other] of othersNow) {
       const local = roadData.project(other.lat, other.lng);
+      let trail = remoteTrails.get(id);
+      if (!trail) { trail = []; remoteTrails.set(id, trail); }
+      const last = trail[trail.length - 1];
+      if (!last || Math.hypot(last.x - local.x, last.y - local.y) > 1.5) {
+        trail.push({ x: local.x, y: local.y });
+        if (trail.length > 20) trail.shift();
+      }
+      for (let i = 0; i < trail.length - 1; i++) {
+        const tp = toScreen(trail[i].x, trail[i].y);
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(224,64,251,${0.06 + (i / trail.length) * 0.2})`;
+        ctx.arc(tp.sx, tp.sy, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       const p = toScreen(local.x, local.y);
       if (p.sx < -50 || p.sx > w + 50 || p.sy < -50 || p.sy > h + 50) continue;
       ctx.save();

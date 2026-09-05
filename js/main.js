@@ -69,6 +69,10 @@ initCollectablesUI();
 initGarageUI();
 initStatsUI();
 
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch((err) => console.warn("Service worker registration failed", err));
+}
+
 const muteBtn = document.getElementById("mute-btn");
 function refreshMuteBtn() { muteBtn.textContent = isMuted() ? "🔇" : "🔊"; }
 muteBtn.addEventListener("click", () => { setMuted(!isMuted()); refreshMuteBtn(); });

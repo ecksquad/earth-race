@@ -3,8 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="theme-color" content="#0b1016">
+<meta name="theme-color" content="#040608">
 <title>EARTH RACE</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root{
@@ -92,6 +95,21 @@
   #hud-split.show{display:block}
   #back-btn{position:absolute;bottom:14px;right:14px;background:var(--panel2);color:var(--ink);
     border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer}
+
+  /* Touch controls: hidden on mouse/trackpad devices, shown on anything
+     coarse-pointer (phones/tablets) — reuses the exact same keysDown input
+     path as the keyboard, so no separate physics wiring is needed. */
+  #touch-controls{display:none}
+  @media (pointer: coarse) {
+    #touch-controls{display:block}
+  }
+  .touch-steer{position:absolute;left:14px;bottom:14px;display:flex;gap:10px}
+  .touch-pedals{position:absolute;right:14px;bottom:14px;display:flex;align-items:flex-end;gap:10px}
+  .touch-btn{width:64px;height:64px;border-radius:50%;background:rgba(10,14,19,.55);color:#eef3f7;
+    border:1px solid rgba(255,255,255,.2);font-size:26px;-webkit-user-select:none;user-select:none;
+    touch-action:none}
+  .touch-btn.small{width:44px;height:44px;font-size:18px;align-self:flex-end;margin-bottom:10px}
+  .touch-btn:active{background:rgba(51,224,194,.35)}
 
   #ghost-toggle-wrap{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:none;
     align-items:center;gap:10px;background:rgba(10,14,19,.72);color:#eef3f7;border:1px solid rgba(255,255,255,.1);
@@ -238,6 +256,17 @@
       </div>
     </div>
     <button id="back-btn">&larr; Back to map</button>
+    <div id="touch-controls">
+      <div class="touch-steer">
+        <button id="touch-left" class="touch-btn">◀</button>
+        <button id="touch-right" class="touch-btn">▶</button>
+      </div>
+      <div class="touch-pedals">
+        <button id="touch-handbrake" class="touch-btn small">✋</button>
+        <button id="touch-brake" class="touch-btn">▽</button>
+        <button id="touch-throttle" class="touch-btn">△</button>
+      </div>
+    </div>
     <div id="landmark-banner"></div>
     <div id="ghost-toggle-wrap">
       <label>
