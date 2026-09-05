@@ -64,7 +64,30 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
   );
 }
 
-const picker = initPicker(onConfirmStart);
+async function onConfirmGrandPrix(circuit, laps) {
+  const snapped = await snapToNearestRoad(circuit.lat, circuit.lng);
+  if (!snapped) {
+    throw new Error("No road found at this circuit right now — try another one.");
+  }
+
+  const roadData = new RoadData(snapped.lat, snapped.lng);
+  const car = createCar(0, 0, circuit.heading * Math.PI / 180);
+
+  showDrive();
+  startDrive(
+    {
+      roadData, car,
+      endLocal: { x: 0, y: 0 }, // the start/finish line — see drive.js's Grand Prix lap logic
+      endLatLng: { lat: snapped.lat, lng: snapped.lng },
+      startLatLng: { lat: snapped.lat, lng: snapped.lng },
+      distanceKm: circuit.lapKm * laps,
+      raceMode: { type: "gp", circuit, laps },
+    },
+    { onBack: showPicker }
+  );
+}
+
+const picker = initPicker(onConfirmStart, onConfirmGrandPrix);
 initCollectablesUI();
 initGarageUI();
 initStatsUI();

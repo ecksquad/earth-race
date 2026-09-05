@@ -13,6 +13,7 @@ import { saveRoute, loadRoutes, deleteRoute } from "./storage.js";
 import { haversineDistanceKm } from "./geo.js";
 import { resumeAudio } from "./audio.js";
 import { REGIONS } from "./collectables.js";
+import { GRAND_PRIX_CIRCUITS, LAP_OPTIONS } from "./grandprix.js";
 
 // A handful of well-known real drives, as instant-start presets — approximate
 // city-level coordinates, not the exact famous alignment/track in every case
@@ -26,7 +27,7 @@ const FAMOUS_ROUTES = [
   { name: "🇩🇪 Autobahn: Munich → Nuremberg", startLat: 48.1351, startLng: 11.5820, endLat: 49.4521, endLng: 11.0767 },
 ];
 
-export function initPicker(onConfirm) {
+export function initPicker(onConfirm, onConfirmGp) {
   const map = L.map("map", { worldCopyJump: true }).setView([20, 0], 3);
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
     maxZoom: 19,
@@ -48,6 +49,11 @@ export function initPicker(onConfirm) {
   const savedRoutesEl = document.getElementById("saved-routes");
   const surpriseBtn = document.getElementById("surprise-me-btn");
   const famousRoutesEl = document.getElementById("famous-routes");
+  const gpToggleBtn = document.getElementById("gp-toggle-btn");
+  const gpPanel = document.getElementById("gp-panel");
+  const gpCircuitsEl = document.getElementById("gp-circuits");
+  const gpLapButtons = [];
+  const gpGoBtn = document.getElementById("gp-go-btn");
 
   function updateUI() {
     goBtn.disabled = !(start && (end || distanceKm > 0));
@@ -204,6 +210,61 @@ export function initPicker(onConfirm) {
       distanceKm: haversineDistanceKm(start.lat, start.lng, end.lat, end.lng),
     });
     renderSavedRoutes();
+  });
+
+  // Grand Prix: pick one of the top-10 real circuits (see grandprix.js) plus
+  // a lap count, then race a lap-based loop through real roads there instead
+  // of the usual point-to-point drive — separate flow/callback (onConfirmGp)
+  // since it needs neither a map click nor a distance.
+  let selectedCircuit = null;
+  let selectedLaps = null;
+
+  function updateGpUI() {
+    gpGoBtn.disabled = !(selectedCircuit && selectedLaps);
+  }
+
+  gpToggleBtn.addEventListener("click", () => gpPanel.classList.toggle("show"));
+
+  for (const circuit of GRAND_PRIX_CIRCUITS) {
+    const chip = document.createElement("div");
+    chip.className = "route-chip gp-chip";
+    chip.title = `${circuit.lapKm.toFixed(2)} km per lap`;
+    chip.textContent = circuit.name;
+    chip.addEventListener("click", () => {
+      selectedCircuit = circuit;
+      Array.from(gpCircuitsEl.children).forEach(c => c.classList.remove("selected"));
+      chip.classList.add("selected");
+      updateGpUI();
+    });
+    gpCircuitsEl.appendChild(chip);
+  }
+
+  for (const laps of LAP_OPTIONS) {
+    const btn = document.createElement("button");
+    btn.className = "dist-btn lap-btn";
+    btn.textContent = laps === 1 ? "1 lap" : `${laps} laps`;
+    btn.addEventListener("click", () => {
+      selectedLaps = laps;
+      gpLapButtons.forEach(b => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      updateGpUI();
+    });
+    gpLapButtons.push(btn);
+    document.getElementById("gp-laps").appendChild(btn);
+  }
+
+  gpGoBtn.addEventListener("click", async () => {
+    if (!selectedCircuit || !selectedLaps || !onConfirmGp) return;
+    resumeAudio();
+    gpGoBtn.disabled = true;
+    statusEl.textContent = "Setting up the circuit…";
+    try {
+      await onConfirmGp(selectedCircuit, selectedLaps);
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = err.message || "Something went wrong — try another circuit.";
+      gpGoBtn.disabled = false;
+    }
   });
 
   updateUI();

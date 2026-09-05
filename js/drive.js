@@ -118,7 +118,8 @@ function readGamepadInput() {
   return { throttle: Math.max(-1, Math.min(1, throttle)), steer: Math.max(-1, Math.min(1, steer)), handbrake };
 }
 
-export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm }, { onBack }) {
+export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm, raceMode }, { onBack }) {
+  const isGp = !!(raceMode && raceMode.type === "gp");
   const canvas = document.getElementById("gamecanvas");
   const ctx = canvas.getContext("2d");
   const hudTime = document.getElementById("hud-time");
@@ -126,6 +127,13 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   const hudRemaining = document.getElementById("hud-remaining");
   const hudSplit = document.getElementById("hud-split");
   const hudBest = document.getElementById("hud-best");
+  const hudBoxNormal = document.getElementById("hud-box-normal");
+  const hudBoxGp = document.getElementById("hud-box-gp");
+  const gpLapEl = document.getElementById("gp-lap");
+  const gpTotalLapsEl = document.getElementById("gp-total-laps");
+  const gpPositionEl = document.getElementById("gp-position");
+  const gpFieldSizeEl = document.getElementById("gp-field-size");
+  const gpStandingsListEl = document.getElementById("gp-standings-list");
   const offroadBadge = document.getElementById("offroad-badge");
   const backBtn = document.getElementById("back-btn");
   const resultEl = document.getElementById("result");
@@ -146,22 +154,32 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   const collectProgressBadge = document.getElementById("collect-progress");
   const landmarkBanner = document.getElementById("landmark-banner");
 
-  const previousBest = findBest(startLatLng.lat, startLatLng.lng, endLatLng.lat, endLatLng.lng);
+  // Grand Prix races have no fixed (start, end) pair to key a ghost/best-time
+  // or saved-route off — the "route" is whatever real roads the player
+  // happens to loop through — so all of that (ghosts, save-route, landmark
+  // banner) is skipped entirely for GP; see the isGp branches below instead.
+  const previousBest = isGp ? null : findBest(startLatLng.lat, startLatLng.lng, endLatLng.lat, endLatLng.lng);
   hudBest.textContent = previousBest ? fmtTime(previousBest.timeSeconds) : "–";
   resultEl.classList.remove("show");
+  gpStandingsListEl.style.display = "none";
+  gpStandingsListEl.innerHTML = "";
   saveThisRouteBtn.disabled = false;
   saveThisRouteBtn.textContent = "Save this route";
+  saveThisRouteBtn.style.display = isGp ? "none" : "";
   copyGhostBtn.classList.remove("show");
   copyGhostBtn.textContent = "📋 Copy ghost code";
 
-  if (endLatLng.name) {
+  if (isGp) {
+    landmarkBanner.textContent = `🏁 ${raceMode.circuit.name} — Grand Prix`;
+    landmarkBanner.classList.add("show");
+  } else if (endLatLng.name) {
     landmarkBanner.textContent = `📍 ${endLatLng.name}`;
     landmarkBanner.classList.add("show");
   } else {
     landmarkBanner.classList.remove("show");
   }
 
-  let ghost = getGhost(startLatLng.lat, startLatLng.lng, endLatLng.lat, endLatLng.lng);
+  let ghost = isGp ? null : getGhost(startLatLng.lat, startLatLng.lng, endLatLng.lat, endLatLng.lng);
   let importedGhost = null;
   let showGhost = false;
   ghostToggleInput.checked = false;
@@ -214,9 +232,40 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   let toastTimer = null;
 
   const baseMap = new BaseMap(roadData);
-  const bots = spawnBots(roadData, car.x, car.y);
+  // Grand Prix races replace ambient traffic with a smaller, faster set of
+  // "racer" bots that double as both the competition (see gp.* below, which
+  // tracks their lap progress via bot.totalDistanceM) and as things you can
+  // still crash into — no separate AI system needed.
+  const GP_RACER_COUNT = 7;
+  const GP_RACER_SPEED_MUL = 1.5;
+  const bots = spawnBots(roadData, car.x, car.y, isGp ? GP_RACER_COUNT : BOT_COUNT, isGp ? GP_RACER_SPEED_MUL : 1);
   const COLLISION_DIST_M = CAR_HITBOX_RADIUS_M + BOT_RADIUS_M;
   const CRASH_COMBINED_KMH = 200;
+
+  // Grand Prix lap state: `armed` gates lap counting so spawning right on top
+  // of the start/finish line doesn't instantly count as finishing a lap —
+  // the player must first get GP_ARM_DIST_M away from it before crossing back
+  // within FINISH_RADIUS_M counts as completing a lap. Player standing is a
+  // fractional-lap score (completed laps + progress into the current one)
+  // compared against every bot's own totalDistanceM/lapMeters — see tick().
+  const GP_ARM_DIST_M = 150;
+  const gp = isGp ? {
+    circuit: raceMode.circuit,
+    totalLaps: raceMode.laps,
+    lap: 1,
+    armed: false,
+    lapStartOdometerM: 0,
+  } : null;
+  if (isGp) {
+    bots.forEach((b, i) => { b.racerNumber = i + 1; });
+    hudBoxNormal.style.display = "none";
+    hudBoxGp.style.display = "block";
+    gpTotalLapsEl.textContent = String(gp.totalLaps);
+    gpFieldSizeEl.textContent = String(bots.length + 1);
+  } else {
+    hudBoxNormal.style.display = "";
+    hudBoxGp.style.display = "none";
+  }
 
   // Garage: which vehicle class/skin the player currently has equipped (see
   // storage.js/achievements.js) — purely handling stats + a sprite tint/scale,
@@ -430,6 +479,47 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     };
   }
 
+  // Fractional-lap standings for Grand Prix mode: both the player and every
+  // bot get a score of (real distance covered) / (one lap's length), so they
+  // compare directly even though the player's laps are counted by physically
+  // crossing the start/finish line while bots (no routing graph to actually
+  // lap a course, see bots.js) just accumulate raw driven distance. It's an
+  // approximation, not a literal position on track — same spirit as this
+  // file's other real-road approximations.
+  function gpStandings() {
+    const lapMeters = gp.circuit.lapKm * 1000;
+    const playerScore = (gp.lap - 1) + Math.max(0, odometerM - gp.lapStartOdometerM) / lapMeters;
+    const entries = [{ isPlayer: true, label: "You", score: playerScore }];
+    for (const bot of bots) entries.push({ isPlayer: false, label: `Rival ${bot.racerNumber}`, score: (bot.totalDistanceM || 0) / lapMeters });
+    entries.sort((a, b) => b.score - a.score);
+    return { position: entries.findIndex(e => e.isPlayer) + 1, total: entries.length, entries };
+  }
+
+  function renderGpStandings() {
+    const { entries } = gpStandings();
+    gpStandingsListEl.innerHTML = "";
+    gpStandingsListEl.style.display = "block";
+    entries.forEach((e, i) => {
+      const row = document.createElement("div");
+      row.className = "gp-row" + (e.isPlayer ? " me" : "");
+      const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `P${i + 1}`;
+      row.innerHTML = `<span>${medal} ${e.label}</span><span>${e.score.toFixed(2)} laps</span>`;
+      gpStandingsListEl.appendChild(row);
+    });
+  }
+
+  function finishGp() {
+    finished = true;
+    wrapUpStats(true);
+    const timeSeconds = (performance.now() - raceStartTime) / 1000;
+    const { position, total } = gpStandings();
+    resultHeading.textContent = position === 1 ? "🏁 You won the race!" : `🏁 Finished P${position} / ${total}`;
+    resultTimeEl.textContent = fmtTime(timeSeconds);
+    resultBestEl.textContent = `${gp.circuit.name} — ${gp.totalLaps} laps`;
+    renderGpStandings();
+    resultEl.classList.add("show");
+  }
+
   // Ghost playback position at `elapsed` seconds into the race, or null once
   // that ghost's recorded run has finished (or hasn't started/doesn't exist).
   // Takes an explicit ghost so both the local-best and an imported ghost can
@@ -539,11 +629,33 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     const halfWm = (w / 2) / PX_PER_METER, halfHm = (h / 2) / PX_PER_METER;
     baseMap.draw(ctx, toScreen, camX - halfWm, camY - halfHm, camX + halfWm, camY + halfHm);
 
-    const endPt = toScreen(endLocal.x, endLocal.y);
-    ctx.fillStyle = "#ef5350";
-    ctx.beginPath();
-    ctx.arc(endPt.sx, endPt.sy, 8, 0, Math.PI * 2);
-    ctx.fill();
+    if (isGp) {
+      // Checkered start/finish line, drawn perpendicular to the circuit's
+      // approximate front-straight heading, right across the road at (0,0).
+      const headingRad = gp.circuit.heading * Math.PI / 180;
+      const dirX = Math.sin(headingRad), dirY = Math.cos(headingRad);
+      const nx = dirY, ny = -dirX; // perpendicular to the driving direction
+      const halfWidthM = 10, squareM = 2;
+      ctx.save();
+      ctx.lineWidth = 10 * PX_PER_METER / 3; // wide enough to read as a line, not a dash
+      for (let i = -halfWidthM; i < halfWidthM; i += squareM) {
+        const black = Math.floor((i + halfWidthM) / squareM) % 2 === 0;
+        const a = toScreen(nx * i, ny * i);
+        const b = toScreen(nx * (i + squareM), ny * (i + squareM));
+        ctx.strokeStyle = black ? "#111" : "#fff";
+        ctx.beginPath();
+        ctx.moveTo(a.sx, a.sy);
+        ctx.lineTo(b.sx, b.sy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      const endPt = toScreen(endLocal.x, endLocal.y);
+      ctx.fillStyle = "#ef5350";
+      ctx.beginPath();
+      ctx.arc(endPt.sx, endPt.sy, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     const bobT = performance.now() / 300;
     for (const c of collectables) {
@@ -616,9 +728,9 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     if (showGhost && raceStartTime !== null) {
       const elapsed = (performance.now() - raceStartTime) / 1000;
       for (const g of activeGhosts()) {
-        const gp = ghostPositionAt(g, elapsed);
-        if (!gp) continue;
-        const p = toScreen(gp.x, gp.y);
+        const ghostPos = ghostPositionAt(g, elapsed);
+        if (!ghostPos) continue;
+        const p = toScreen(ghostPos.x, ghostPos.y);
         ctx.save();
         ctx.globalAlpha = 0.45;
         ctx.translate(p.sx, p.sy);
@@ -626,13 +738,13 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = "high";
           ctx.filter = g === importedGhost ? "hue-rotate(190deg) saturate(1.5) brightness(1.3)" : "grayscale(1) brightness(1.6)";
-          ctx.rotate(gp.heading + CAR_SPRITE_BASE_ROTATION);
+          ctx.rotate(ghostPos.heading + CAR_SPRITE_BASE_ROTATION);
           const lenPx = CAR_LENGTH_M * PX_PER_METER;
           const widPx = lenPx * (carSprite.height / carSprite.width);
           ctx.drawImage(carSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
           ctx.filter = "none";
         } else {
-          ctx.rotate(gp.heading);
+          ctx.rotate(ghostPos.heading);
           ctx.fillStyle = g === importedGhost ? "#4a90d9" : "#eef3f7";
           ctx.beginPath();
           ctx.moveTo(0, -10);
@@ -930,11 +1042,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
     if (!explosion) {
       const kb = readKeyboardInput();
-      const gp = readGamepadInput();
+      const gamepadInput = readGamepadInput();
       const input = {
-        throttle: Math.max(-1, Math.min(1, kb.throttle + gp.throttle)),
-        steer: Math.max(-1, Math.min(1, kb.steer + gp.steer)),
-        handbrake: kb.handbrake || gp.handbrake,
+        throttle: Math.max(-1, Math.min(1, kb.throttle + gamepadInput.throttle)),
+        steer: Math.max(-1, Math.min(1, kb.steer + gamepadInput.steer)),
+        handbrake: kb.handbrake || gamepadInput.handbrake,
       };
 
       if (raceStartTime === null && (input.throttle !== 0 || input.steer !== 0)) {
@@ -1021,36 +1133,61 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
       const dx = endLocal.x - car.x, dy = endLocal.y - car.y;
       const remainingM = Math.hypot(dx, dy);
-      if (raceStartTime !== null && remainingM < FINISH_RADIUS_M) {
+
+      if (isGp) {
+        // Lap crossing: must first get GP_ARM_DIST_M away from the
+        // start/finish line before coming back within FINISH_RADIUS_M counts
+        // as a lap — otherwise sitting right at the spawn point (remainingM
+        // ~0) would instantly "complete" lap after lap.
+        if (raceStartTime !== null) {
+          if (!gp.armed && remainingM > GP_ARM_DIST_M) {
+            gp.armed = true;
+          } else if (gp.armed && remainingM < FINISH_RADIUS_M) {
+            gp.armed = false;
+            gp.lapStartOdometerM = odometerM;
+            gp.lap++;
+            if (gp.lap > gp.totalLaps) { finishGp(); return; }
+            queueCollectToast({ icon: "🏁", name: `Lap ${gp.lap} / ${gp.totalLaps}`, rarity: "Grand Prix" });
+          }
+        }
+      } else if (raceStartTime !== null && remainingM < FINISH_RADIUS_M) {
         finish();
         return;
       }
 
       hudTime.textContent = fmtTime(raceStartTime === null ? 0 : (performance.now() - raceStartTime) / 1000);
       hudSpeed.textContent = Math.round(Math.abs(car.speed) * 3.6);
-      hudRemaining.textContent = (remainingM / 1000).toFixed(2);
 
-      // Live "ahead/behind" vs whichever ghost is showing (imported takes
-      // priority for this readout when both are active) — a distance-based
-      // comparison (who's closer to the finish right now), not a true time
-      // split, since two different real-road paths can't be matched sample-
-      // for-sample the way a fixed track's distance-along-track can.
-      if (hudSplit) {
-        const g = importedGhost || ghost;
-        const ghosts = activeGhosts();
-        if (showGhost && g && ghosts.includes(g) && raceStartTime !== null) {
-          const gp = ghostPositionAt(g, (performance.now() - raceStartTime) / 1000);
-          if (gp) {
-            const ghostRemaining = Math.hypot(endLocal.x - gp.x, endLocal.y - gp.y);
-            const deltaM = Math.round(ghostRemaining - remainingM);
-            hudSplit.textContent = deltaM >= 0 ? `▲ ${deltaM}m ahead` : `▼ ${-deltaM}m behind`;
-            hudSplit.style.color = deltaM >= 0 ? "#35c37a" : "#ef5350";
-            hudSplit.classList.add("show");
+      if (isGp) {
+        const { position, total } = gpStandings();
+        gpLapEl.textContent = String(Math.min(gp.lap, gp.totalLaps));
+        gpPositionEl.textContent = `P${position}`;
+        gpFieldSizeEl.textContent = String(total);
+      } else {
+        hudRemaining.textContent = (remainingM / 1000).toFixed(2);
+
+        // Live "ahead/behind" vs whichever ghost is showing (imported takes
+        // priority for this readout when both are active) — a distance-based
+        // comparison (who's closer to the finish right now), not a true time
+        // split, since two different real-road paths can't be matched sample-
+        // for-sample the way a fixed track's distance-along-track can.
+        if (hudSplit) {
+          const g = importedGhost || ghost;
+          const ghosts = activeGhosts();
+          if (showGhost && g && ghosts.includes(g) && raceStartTime !== null) {
+            const ghostPos = ghostPositionAt(g, (performance.now() - raceStartTime) / 1000);
+            if (ghostPos) {
+              const ghostRemaining = Math.hypot(endLocal.x - ghostPos.x, endLocal.y - ghostPos.y);
+              const deltaM = Math.round(ghostRemaining - remainingM);
+              hudSplit.textContent = deltaM >= 0 ? `▲ ${deltaM}m ahead` : `▼ ${-deltaM}m behind`;
+              hudSplit.style.color = deltaM >= 0 ? "#35c37a" : "#ef5350";
+              hudSplit.classList.add("show");
+            } else {
+              hudSplit.classList.remove("show");
+            }
           } else {
             hudSplit.classList.remove("show");
           }
-        } else {
-          hudSplit.classList.remove("show");
         }
       }
       offroadBadge.classList.toggle("show", offRoad);

@@ -75,6 +75,18 @@
   .route-chip:hover{border-color:var(--accent)}
   .route-chip button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px}
   .route-chip button:hover{color:var(--bad)}
+  .route-chip.selected{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+
+  #gp-toggle-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;
+    padding:9px 16px;font-size:13px;cursor:pointer}
+  #gp-toggle-btn:hover{border-color:var(--accent)}
+  #gp-panel{flex:1 1 100%;display:none;flex-direction:column;gap:10px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:12px;padding:14px}
+  #gp-panel.show{display:flex}
+  #gp-circuits,#gp-laps{display:flex;flex-wrap:wrap;gap:8px}
+  #gp-go-btn{align-self:flex-start;background:var(--accent);color:var(--accent-ink);border:none;border-radius:20px;
+    padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px var(--accent-soft)}
+  #gp-go-btn:disabled{opacity:.4;cursor:default;box-shadow:none}
 
   /* --- drive screen --- */
   /* Prevent native pinch-zoom/pan on touch devices — the picker screen's
@@ -93,6 +105,10 @@
   #offroad-badge.show{display:inline-block}
   #hud-split{display:none;font-size:13px;font-weight:700;margin-top:4px}
   #hud-split.show{display:block}
+  #hud-box-gp{display:none}
+  #gp-standings-list{display:none;margin:14px 0;text-align:left;max-height:220px;overflow-y:auto}
+  #gp-standings-list .gp-row{display:flex;justify-content:space-between;gap:16px;padding:6px 4px;font-size:14px}
+  #gp-standings-list .gp-row.me{color:var(--accent);font-weight:700}
   #back-btn{position:absolute;bottom:14px;right:14px;background:var(--panel2);color:var(--ink);
     border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer}
 
@@ -238,6 +254,13 @@
       <span id="picker-status"></span>
       <div id="saved-routes"></div>
       <div id="famous-routes"></div>
+      <button id="gp-toggle-btn">🏁 Grand Prix</button>
+      <div id="gp-panel">
+        <div class="hint">Pick a circuit, then a lap count.</div>
+        <div id="gp-circuits"></div>
+        <div id="gp-laps"></div>
+        <button id="gp-go-btn" disabled>Start Grand Prix</button>
+      </div>
     </div>
   </section>
 
@@ -249,10 +272,14 @@
         SPEED <span id="hud-speed">0</span> km/h
         <span id="offroad-badge">OFF ROAD</span>
       </div>
-      <div class="hud-box">
+      <div class="hud-box" id="hud-box-normal">
         TO GO <span id="hud-remaining">–</span> km<br>
         BEST <span id="hud-best">–</span>
         <div id="hud-split"></div>
+      </div>
+      <div class="hud-box" id="hud-box-gp">
+        LAP <span id="gp-lap">1</span> / <span id="gp-total-laps">–</span><br>
+        POSITION <span id="gp-position">P1</span> / <span id="gp-field-size">–</span>
       </div>
     </div>
     <button id="back-btn">&larr; Back to map</button>
@@ -287,6 +314,7 @@
         <h2 id="result-heading">Finished!</h2>
         <div class="time" id="result-time">00:00.0</div>
         <div class="best" id="result-best"></div>
+        <div id="gp-standings-list"></div>
         <button id="save-this-route-btn">Save this route</button>
         <button id="copy-ghost-btn">📋 Copy ghost code</button>
         <button id="race-again-btn">Race again</button>

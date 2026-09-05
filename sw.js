@@ -4,7 +4,7 @@
 // (Firebase) all need to be genuinely live to be useful, so those are never
 // intercepted here, only same-origin shell files.
 
-const CACHE_NAME = "earthrace-shell-v2";
+const CACHE_NAME = "earthrace-shell-v3";
 const SHELL_FILES = [
   "./",
   "index.html",
@@ -13,7 +13,7 @@ const SHELL_FILES = [
   "js/roads.js", "js/geo.js", "js/storage.js", "js/collectables.js",
   "js/collectablesUI.js", "js/achievements.js", "js/garageUI.js", "js/statsUI.js",
   "js/audio.js", "js/multiplayer.js", "js/firebaseConfig.js", "js/ghostCode.js",
-  "js/basemap.js", "js/tileCache.js",
+  "js/basemap.js", "js/tileCache.js", "js/grandprix.js",
   "assets/car-top.png", "assets/engine-idle.mp3", "assets/horn.mp3",
   "assets/icon-192.png", "assets/icon-512.png",
 ];

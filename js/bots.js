@@ -76,6 +76,12 @@ function initOnSegment(seg, nearX, nearY, speedTarget, accel) {
     speedTarget, accel,
     seg, dir, t: 0,
     speedBoost: 0, reactionCooldown: 0,
+    // Deliberately NOT included here: totalDistanceM. This object gets
+    // Object.assign'd onto an existing bot every time it continues onto a
+    // new segment (see stepBot) — if totalDistanceM were set here, every
+    // segment change would reset it to 0. Leaving it out means Object.assign
+    // never touches it, so it accumulates across a bot's whole lifetime
+    // (used by Grand Prix mode's lap counting, see drive.js).
   };
 }
 
@@ -96,18 +102,22 @@ function spawnAwayFrom(roadData, refX, refY, speedTarget, accel) {
     const seg = pickSegmentNear(roadData, p.x, p.y);
     if (!seg) continue;
     const bot = initOnSegment(seg, p.x, p.y, speedTarget, accel);
+    bot.totalDistanceM = 0;
     if (Math.hypot(bot.x - refX, bot.y - refY) >= BOT_SPAWN_MIN_DIST_M) return bot;
   }
   return {
     x: lastP.x, y: lastP.y, heading: 0, speed: 0, speedTarget, accel, seg: null, dir: 1, t: 0,
-    speedBoost: 0, reactionCooldown: 0,
+    speedBoost: 0, reactionCooldown: 0, totalDistanceM: 0,
   };
 }
 
-export function spawnBots(roadData, aroundX, aroundY, count = BOT_COUNT) {
+// `speedMul` scales the whole BOT_SPEED_MIN..MAX cruising range — Grand Prix
+// mode (see drive.js) uses this to make racer bots feel like actual
+// competitors instead of ambient traffic, without needing a second AI system.
+export function spawnBots(roadData, aroundX, aroundY, count = BOT_COUNT, speedMul = 1) {
   const bots = [];
   for (let i = 0; i < count; i++) {
-    const speedTarget = BOT_SPEED_MIN + Math.random() * (BOT_SPEED_MAX - BOT_SPEED_MIN);
+    const speedTarget = (BOT_SPEED_MIN + Math.random() * (BOT_SPEED_MAX - BOT_SPEED_MIN)) * speedMul;
     bots.push(spawnAwayFrom(roadData, aroundX, aroundY, speedTarget, BOT_ACCEL));
   }
   return bots;
@@ -176,6 +186,7 @@ function stepBot(bot, roadData, dt) {
 
   const diff = (bot.speedTarget + bot.speedBoost) - bot.speed;
   bot.speed += Math.sign(diff) * Math.min(Math.abs(diff), bot.accel * dt);
+  bot.totalDistanceM = (bot.totalDistanceM || 0) + Math.abs(bot.speed) * dt;
 
   const seg = bot.seg;
   const x1 = bot.dir === 1 ? seg.x1 : seg.x2, y1 = bot.dir === 1 ? seg.y1 : seg.y2;
