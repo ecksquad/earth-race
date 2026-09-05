@@ -33,9 +33,9 @@
   #online-badge{margin-left:auto;display:none;align-items:center;font-size:12px;color:var(--good);
     font-variant-numeric:tabular-nums;cursor:pointer}
   #online-badge.show{display:inline-flex}
-  #mute-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  #mute-btn,#garage-btn,#stats-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
     border-radius:20px;padding:7px 12px;font-size:14px;cursor:pointer;transition:border-color .15s ease, transform .1s ease}
-  #mute-btn:hover{border-color:var(--accent);transform:translateY(-1px)}
+  #mute-btn:hover,#garage-btn:hover,#stats-btn:hover{border-color:var(--accent);transform:translateY(-1px)}
   #collectables-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
     border-radius:20px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;
     transition:border-color .15s ease, transform .1s ease}
@@ -61,9 +61,12 @@
   #save-route-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;
     padding:9px 16px;font-size:13px;cursor:pointer}
   #save-route-btn:disabled{opacity:.4;cursor:default}
+  #surprise-me-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;
+    padding:9px 16px;font-size:13px;cursor:pointer}
+  #surprise-me-btn:hover{border-color:var(--warn)}
   #picker-status{font-size:12px;color:var(--warn)}
-  #saved-routes{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px}
-  #saved-routes:empty{display:none}
+  #saved-routes,#famous-routes{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px}
+  #saved-routes:empty,#famous-routes:empty{display:none}
   .route-chip{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);
     border-radius:8px;padding:6px 8px 6px 12px;font-size:12px;color:var(--ink);cursor:pointer}
   .route-chip:hover{border-color:var(--accent)}
@@ -85,6 +88,8 @@
   #offroad-badge{background:var(--bad-soft);color:var(--bad);font-weight:700;border-radius:9px;
     padding:3px 12px;font-size:17px;letter-spacing:.06em;display:none}
   #offroad-badge.show{display:inline-block}
+  #hud-split{display:none;font-size:13px;font-weight:700;margin-top:4px}
+  #hud-split.show{display:block}
   #back-btn{position:absolute;bottom:14px;right:14px;background:var(--panel2);color:var(--ink);
     border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer}
 
@@ -148,6 +153,32 @@
   .collect-rarity-legend span{display:inline-flex;align-items:center;gap:5px}
   .collect-rarity-legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
 
+  #garage-modal,#stats-modal{position:fixed;inset:0;background:rgba(4,6,8,.75);display:none;align-items:center;
+    justify-content:center;z-index:9000;padding:24px}
+  #garage-modal.show,#stats-modal.show{display:flex}
+  .modal-card.small{width:min(520px,100%);max-height:80vh;overflow-y:auto}
+  .garage-section-label{padding:14px 20px 4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .garage-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;padding:0 20px 14px}
+  .garage-option{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+    text-align:left;cursor:pointer;color:var(--ink)}
+  .garage-option:hover{border-color:var(--accent)}
+  .garage-option.selected{border-color:var(--accent);background:var(--accent-soft)}
+  .garage-option.locked{opacity:.55;cursor:default}
+  .garage-option-title{font-size:13px;font-weight:700}
+  .garage-option-sub{font-size:11px;color:var(--muted);margin-top:2px}
+
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;padding:16px 20px}
+  .stat-tile{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+  .stat-tile b{display:block;font-size:18px;color:var(--accent)}
+  .stat-tile span{font-size:11px;color:var(--muted)}
+  .achievements-list{padding:0 20px 20px;display:flex;flex-direction:column;gap:8px}
+  .achievement-row{display:flex;align-items:center;gap:12px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;opacity:.5}
+  .achievement-row.unlocked{opacity:1;border-color:var(--accent)}
+  .achievement-icon{font-size:22px}
+  .achievement-name{font-size:13px;font-weight:700}
+  .achievement-desc{font-size:11px;color:var(--muted)}
+
   #result{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     background:rgba(4,6,8,.72)}
   #result.show{display:flex}
@@ -169,6 +200,8 @@
     <span class="sub">drive the real world, on the roads — WASD / arrow keys / gamepad</span>
     <span id="online-badge" title="Other players currently driving, anywhere on Earth">👥 0 online</span>
     <button id="mute-btn" title="Mute/unmute sound">🔊</button>
+    <button id="garage-btn" title="Garage: vehicle &amp; skin">🚗</button>
+    <button id="stats-btn" title="Stats &amp; achievements">🏅</button>
     <button id="collectables-btn" title="View all collectables">🏆 <span id="collect-progress">0 / 1000</span></button>
   </header>
 
@@ -183,8 +216,10 @@
       <input id="custom-km" type="number" min="0.1" step="0.1" placeholder="custom km">
       <button id="go-btn" disabled>Start Race</button>
       <button id="save-route-btn" disabled title="Set an exact end point to save this route">Save route</button>
+      <button id="surprise-me-btn" title="Random start point, anywhere on Earth, plus a random distance">🎲 Surprise Me</button>
       <span id="picker-status"></span>
       <div id="saved-routes"></div>
+      <div id="famous-routes"></div>
     </div>
   </section>
 
@@ -199,6 +234,7 @@
       <div class="hud-box">
         TO GO <span id="hud-remaining">–</span> km<br>
         BEST <span id="hud-best">–</span>
+        <div id="hud-split"></div>
       </div>
     </div>
     <button id="back-btn">&larr; Back to map</button>
@@ -249,6 +285,30 @@
         <span><i style="background:rgb(240,168,63)"></i>Legendary</span>
       </div>
       <div id="collectables-grid"></div>
+    </div>
+  </div>
+
+  <div id="garage-modal">
+    <div class="modal-card small">
+      <div class="modal-head">
+        <h2>🚗 Garage</h2>
+        <button id="garage-close" title="Close">✕</button>
+      </div>
+      <div class="garage-section-label">Vehicle</div>
+      <div id="garage-classes" class="garage-grid"></div>
+      <div class="garage-section-label">Skin</div>
+      <div id="garage-skins" class="garage-grid"></div>
+    </div>
+  </div>
+
+  <div id="stats-modal">
+    <div class="modal-card small">
+      <div class="modal-head">
+        <h2>🏅 Stats &amp; Achievements</h2>
+        <button id="stats-close" title="Close">✕</button>
+      </div>
+      <div id="stats-grid" class="stats-grid"></div>
+      <div id="achievements-list" class="achievements-list"></div>
     </div>
   </div>
 

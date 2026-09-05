@@ -3,15 +3,22 @@
 // state, so a future 3D renderer can be added alongside it without touching
 // physics or road logic.
 
-import { stepCar, MAX_SPEED_ON_ROAD, MAX_SPEED_OFF_ROAD } from "./car.js";
-import { ROAD_HALF_WIDTH_M, OFFROAD_MARGIN_M } from "./roads.js";
-import { saveRace, findBest, saveRoute, getGhost, saveGhostIfBest, getCollectedIds, markCollected } from "./storage.js";
+import { stepCar, MAX_SPEED_ON_ROAD, MAX_SPEED_OFF_ROAD, VEHICLE_CLASSES, giveNitro } from "./car.js";
+import {
+  ROAD_HALF_WIDTH_M, OFFROAD_MARGIN_M, signalPhase,
+  HAZARD_RADIUS_M, NITRO_RADIUS_M, NITRO_RESPAWN_MS, NITRO_BOOST_SECONDS,
+} from "./roads.js";
+import {
+  saveRace, findBest, saveRoute, getGhost, saveGhostIfBest, getCollectedIds, markCollected,
+  getStats, updateStats, addRegionVisited, unlockAchievement, getGarage,
+} from "./storage.js";
 import { BaseMap, DEFAULT_ZOOM } from "./basemap.js";
-import { spawnBots, stepBots, BOT_RADIUS_M } from "./bots.js";
-import { projectCollectables, RARITY_RGB, COLLECT_RADIUS_M } from "./collectables.js";
+import { spawnBots, stepBots, BOT_RADIUS_M, botWorldPos } from "./bots.js";
+import { projectCollectables, RARITY_RGB, COLLECT_RADIUS_M, regionNameForLatLng, getAllCollectables } from "./collectables.js";
 import { encodeGhost, decodeGhost } from "./ghostCode.js";
 import * as audio from "./audio.js";
 import { startBroadcasting, stopBroadcasting, getOthers } from "./multiplayer.js";
+import { checkAchievements, getAchievement } from "./achievements.js";
 
 const PX_PER_METER = 7.5;
 const FINISH_RADIUS_M = 15;
@@ -21,6 +28,19 @@ const CAR_HITBOX_RADIUS_M = 0.9; // player half-width for collision — real car
 const EXPLOSION_DURATION_MS = 700;
 const GHOST_SAMPLE_INTERVAL_S = 0.15; // how often to record a path point for the ghost replay
 const TOAST_DURATION_MS = 2600;
+const SKID_MARK_LIFETIME_MS = 2500;
+const SKID_MARK_INTERVAL_M = 1.2; // minimum travel distance between recorded skid points
+
+// Skin unlocks (see achievements.js) are a CSS filter applied to the same
+// sprite, not new art — cheap "cosmetic reward" that's still visually distinct.
+const SKIN_FILTERS = {
+  default: "none",
+  gold: "sepia(1) saturate(4) hue-rotate(-15deg) brightness(1.15)",
+  prismatic: "saturate(2.2) hue-rotate(120deg) brightness(1.1)",
+  chrome: "saturate(0) brightness(1.4) contrast(1.2)",
+  "matte-black": "brightness(0.35) saturate(0.4)",
+  flame: "saturate(2.5) hue-rotate(-40deg) brightness(1.1)",
+};
 
 // The source image's nose points along its own +x (the engine-vent panel is
 // the rear), so bringing it to "nose up" at heading 0 needs a -90° twist
@@ -50,7 +70,7 @@ let carSprite = null;
 
 const MINIMAP_MARGIN = 20;
 const MINIMAP_RADIUS_PX = 144;
-const MINIMAP_METERS = 150; // real-world radius shown on the minimap
+const MINIMAP_METERS = 300; // real-world radius shown on the minimap (2x zoomed out from the original 150m)
 
 let raf = null;
 let keysDown = new Set();
@@ -68,19 +88,21 @@ function normalizeKey(e) {
   if (k === "ArrowDown" || k === "s") return "down";
   if (k === "ArrowLeft" || k === "a") return "left";
   if (k === "ArrowRight" || k === "d") return "right";
+  if (k === " " || k === "Spacebar") return "handbrake";
   return null;
 }
 
 function readKeyboardInput() {
   const throttle = (keysDown.has("up") ? 1 : 0) - (keysDown.has("down") ? 1 : 0);
   const steer = (keysDown.has("right") ? 1 : 0) - (keysDown.has("left") ? 1 : 0);
-  return { throttle, steer };
+  const handbrake = keysDown.has("handbrake");
+  return { throttle, steer, handbrake };
 }
 
 function readGamepadInput() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   const gp = pads && pads[0];
-  if (!gp) return { throttle: 0, steer: 0 };
+  if (!gp) return { throttle: 0, steer: 0, handbrake: false };
 
   let steer = gp.axes[0] || 0;
   if (Math.abs(steer) < GAMEPAD_DEADZONE) steer = 0;
@@ -91,8 +113,9 @@ function readGamepadInput() {
   const rt = gp.buttons[7] ? gp.buttons[7].value : 0;
   const lt = gp.buttons[6] ? gp.buttons[6].value : 0;
   if (rt > 0.05 || lt > 0.05) throttle = rt - lt;
+  const handbrake = !!(gp.buttons[0] && gp.buttons[0].pressed); // A/Cross face button
 
-  return { throttle: Math.max(-1, Math.min(1, throttle)), steer: Math.max(-1, Math.min(1, steer)) };
+  return { throttle: Math.max(-1, Math.min(1, throttle)), steer: Math.max(-1, Math.min(1, steer)), handbrake };
 }
 
 export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm }, { onBack }) {
@@ -101,6 +124,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   const hudTime = document.getElementById("hud-time");
   const hudSpeed = document.getElementById("hud-speed");
   const hudRemaining = document.getElementById("hud-remaining");
+  const hudSplit = document.getElementById("hud-split");
   const hudBest = document.getElementById("hud-best");
   const offroadBadge = document.getElementById("offroad-badge");
   const backBtn = document.getElementById("back-btn");
@@ -131,7 +155,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   copyGhostBtn.textContent = "📋 Copy ghost code";
 
   if (endLatLng.name) {
-    landmarkBanner.textContent = `🏛 Destination: ${endLatLng.name}`;
+    landmarkBanner.textContent = `📍 ${endLatLng.name}`;
     landmarkBanner.classList.add("show");
   } else {
     landmarkBanner.classList.remove("show");
@@ -142,15 +166,20 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   let showGhost = false;
   ghostToggleInput.checked = false;
 
-  function activeGhost() { return importedGhost || ghost; }
+  // Racing against both at once (your best AND an imported friend's) is
+  // supported — the toggle just controls visibility of whichever exist.
+  function activeGhosts() {
+    return [ghost, importedGhost].filter(g => g && g.path && g.path.length > 1);
+  }
 
   function refreshGhostToggle() {
-    const g = activeGhost();
-    if (g && g.path && g.path.length > 1) {
+    const ghosts = activeGhosts();
+    if (ghosts.length > 0) {
       ghostToggleWrap.classList.add("show");
-      ghostToggleLabel.textContent = importedGhost
-        ? `👻 Show ghost (imported, ${fmtTime(g.timeSeconds)})`
-        : `👻 Show ghost (your best, ${fmtTime(g.timeSeconds)})`;
+      const parts = [];
+      if (ghost && ghosts.includes(ghost)) parts.push(`best ${fmtTime(ghost.timeSeconds)}`);
+      if (importedGhost && ghosts.includes(importedGhost)) parts.push(`imported ${fmtTime(importedGhost.timeSeconds)}`);
+      ghostToggleLabel.textContent = `👻 Show ghost${parts.length > 1 ? "s" : ""} (${parts.join(" + ")})`;
     } else {
       ghostToggleWrap.classList.remove("show");
     }
@@ -178,6 +207,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   let recordedPath = [];
   let lastSampleT = -Infinity;
   let wasColliding = false;
+  let wasHazardColliding = false;
 
   const collectedIds = getCollectedIds();
   const collectables = projectCollectables(roadData).filter(c => !collectedIds.has(c.id));
@@ -188,6 +218,36 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   const bots = spawnBots(roadData, car.x, car.y);
   const COLLISION_DIST_M = CAR_HITBOX_RADIUS_M + BOT_RADIUS_M;
   const CRASH_COMBINED_KMH = 200;
+
+  // Garage: which vehicle class/skin the player currently has equipped (see
+  // storage.js/achievements.js) — purely handling stats + a sprite tint/scale,
+  // not new art.
+  const garage = getGarage();
+  const vehicleClass = VEHICLE_CLASSES[garage.vehicleClass] ? garage.vehicleClass : "car";
+
+  // Lifetime stats/achievements: driftSeconds/topSpeedKmh/nitroUses accumulate
+  // through the race and get folded into storage.js's running totals on
+  // finish/crash — see wrapUpStats() below.
+  let odometerM = 0;
+  let driftSeconds = 0;
+  let sessionMaxDriftSeconds = 0;
+  let sessionTopSpeedKmh = 0;
+  let sessionNitroUses = 0;
+  const startRegion = regionNameForLatLng(startLatLng.lat, startLatLng.lng);
+
+  // Skid marks: short-lived trail of points recorded while actively
+  // drifting, faded out over SKID_MARK_LIFETIME_MS — purely cosmetic.
+  let skidMarks = []; // { x, y, at }[]
+  let lastSkidX = null, lastSkidY = null;
+
+  function newAchievementToast(ids) {
+    for (const id of ids) {
+      if (unlockAchievement(id)) {
+        const a = getAchievement(id);
+        if (a) queueCollectToast({ icon: a.icon, name: a.name, rarity: "Achievement" });
+      }
+    }
+  }
 
   // Shared-world multiplayer (see multiplayer.js) — a no-op if not configured.
   // Other players are purely cosmetic: real-world position broadcast over the
@@ -289,8 +349,25 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     saveThisRouteBtn.textContent = "Saved!";
   };
 
+  function wrapUpStats(didFinish) {
+    const prev = getStats();
+    const next = updateStats({
+      totalKm: prev.totalKm + odometerM / 1000,
+      totalRaces: prev.totalRaces + (didFinish ? 1 : 0),
+      totalCrashes: prev.totalCrashes + (didFinish ? 0 : 1),
+      topSpeedKmh: Math.max(prev.topSpeedKmh, sessionTopSpeedKmh),
+      nitroUses: prev.nitroUses + sessionNitroUses,
+      maxDriftSeconds: Math.max(prev.maxDriftSeconds, sessionMaxDriftSeconds),
+    });
+    if (didFinish) addRegionVisited(startRegion);
+    const collected = getCollectedIds();
+    const legendaryCount = getAllCollectables().filter(c => c.rarity === "legendary" && collected.has(c.id)).length;
+    newAchievementToast(checkAchievements(next, collected.size, legendaryCount));
+  }
+
   function finish() {
     finished = true;
+    wrapUpStats(true);
     const timeSeconds = (performance.now() - raceStartTime) / 1000;
     saveRace({
       startLat: startLatLng.lat, startLng: startLatLng.lng,
@@ -322,9 +399,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   }
 
   // Ghost playback position at `elapsed` seconds into the race, or null once
-  // the ghost's recorded run has finished (or hasn't started/doesn't exist).
-  function ghostPositionAt(elapsed) {
-    const g = activeGhost();
+  // that ghost's recorded run has finished (or hasn't started/doesn't exist).
+  // Takes an explicit ghost so both the local-best and an imported ghost can
+  // be raced against simultaneously (see draw()).
+  function ghostPositionAt(g, elapsed) {
     if (!g || !g.path || g.path.length === 0) return null;
     const path = g.path;
     if (elapsed < path[0].t) return null;
@@ -352,7 +430,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     collectToastIcon.textContent = c.icon;
     collectToastName.textContent = c.name;
     collectToastRarity.textContent = c.rarity;
-    collectToastRarity.style.color = `rgb(${RARITY_RGB[c.rarity]})`;
+    collectToastRarity.style.color = RARITY_RGB[c.rarity] ? `rgb(${RARITY_RGB[c.rarity]})` : "#f0a83f";
     collectToast.classList.add("show");
     toastTimer = setTimeout(() => {
       collectToast.classList.remove("show");
@@ -362,6 +440,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
   function crash(timeSeconds) {
     finished = true;
+    wrapUpStats(false);
     resultHeading.textContent = "Crashed!";
     resultTimeEl.textContent = fmtTime(timeSeconds);
     resultBestEl.textContent = "Watch out for traffic — try again.";
@@ -452,9 +531,88 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.restore();
     }
 
+    // Roadworks (static — dodge them) and nitro canisters (respawning boost
+    // pickups), generated per-tile by roads.js — see stepGameplay()'s
+    // collision handling for the actual pickup/bump logic.
+    for (const hz of roadData.nearbyHazards(car.x, car.y)) {
+      const p = toScreen(hz.x, hz.y);
+      if (p.sx < -30 || p.sx > w + 30 || p.sy < -30 || p.sy > h + 30) continue;
+      ctx.save();
+      ctx.translate(p.sx, p.sy);
+      ctx.fillStyle = "#f0a83f";
+      ctx.beginPath();
+      ctx.moveTo(0, -9); ctx.lineTo(7, 7); ctx.lineTo(-7, 7); ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#1b232b";
+      ctx.fillRect(-4, 1, 8, 2);
+      ctx.restore();
+    }
+    for (const nt of roadData.nearbyNitros(car.x, car.y)) {
+      if (performance.now() - nt.collectedAt < NITRO_RESPAWN_MS) continue; // picked up recently, waiting to respawn
+      const p = toScreen(nt.x, nt.y);
+      if (p.sx < -30 || p.sx > w + 30 || p.sy < -30 || p.sy > h + 30) continue;
+      const pulse = 1 + Math.sin(bobT * 2 + nt.x) * 0.15;
+      ctx.save();
+      ctx.translate(p.sx, p.sy);
+      ctx.scale(pulse, pulse);
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(74,144,217,.35)";
+      ctx.arc(0, 0, 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = "18px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("⚡", 0, 1);
+      ctx.restore();
+    }
+
+    // Traffic signals — real timing isn't in OSM, so each one just cycles a
+    // deterministic green/yellow/red rhythm (see roads.js's signalPhase()).
+    // Stop signs render as a fixed octagon (no phase to show).
+    const nowMs = Date.now();
+    for (const sig of roadData.nearbySignals(car.x, car.y)) {
+      const p = toScreen(sig.x, sig.y);
+      if (p.sx < -30 || p.sx > w + 30 || p.sy < -30 || p.sy > h + 30) continue;
+      ctx.save();
+      ctx.translate(p.sx, p.sy);
+      if (sig.kind === "stop") {
+        ctx.fillStyle = "#ef5350";
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          const px = Math.cos(a) * 6, py = Math.sin(a) * 6;
+          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        const phase = signalPhase(sig, nowMs);
+        ctx.fillStyle = phase === "green" ? "#35c37a" : phase === "yellow" ? "#f0a83f" : "#ef5350";
+        ctx.beginPath();
+        ctx.arc(0, 0, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // Skid marks: short fading trail left behind while drifting.
+    for (const mark of skidMarks) {
+      const age = performance.now() - mark.at;
+      if (age > SKID_MARK_LIFETIME_MS) continue;
+      const p = toScreen(mark.x, mark.y);
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(20,20,20,${0.35 * (1 - age / SKID_MARK_LIFETIME_MS)})`;
+      ctx.arc(p.sx, p.sy, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Ghosts (see activeGhosts()) — racing your own best AND an imported
+    // friend's simultaneously is supported; each gets a distinct tint.
     if (showGhost && raceStartTime !== null) {
-      const gp = ghostPositionAt((performance.now() - raceStartTime) / 1000);
-      if (gp) {
+      const elapsed = (performance.now() - raceStartTime) / 1000;
+      for (const g of activeGhosts()) {
+        const gp = ghostPositionAt(g, elapsed);
+        if (!gp) continue;
         const p = toScreen(gp.x, gp.y);
         ctx.save();
         ctx.globalAlpha = 0.45;
@@ -462,7 +620,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
         if (carSprite) {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = "high";
-          ctx.filter = "grayscale(1) brightness(1.6)";
+          ctx.filter = g === importedGhost ? "hue-rotate(190deg) saturate(1.5) brightness(1.3)" : "grayscale(1) brightness(1.6)";
           ctx.rotate(gp.heading + CAR_SPRITE_BASE_ROTATION);
           const lenPx = CAR_LENGTH_M * PX_PER_METER;
           const widPx = lenPx * (carSprite.height / carSprite.width);
@@ -470,7 +628,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
           ctx.filter = "none";
         } else {
           ctx.rotate(gp.heading);
-          ctx.fillStyle = "#eef3f7";
+          ctx.fillStyle = g === importedGhost ? "#4a90d9" : "#eef3f7";
           ctx.beginPath();
           ctx.moveTo(0, -10);
           ctx.lineTo(6, 8);
@@ -483,7 +641,8 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     }
 
     for (const bot of bots) {
-      const p = toScreen(bot.x, bot.y);
+      const botPos = botWorldPos(bot);
+      const p = toScreen(botPos.x, botPos.y);
       if (p.sx < -50 || p.sx > w + 50 || p.sy < -50 || p.sy > h + 50) continue;
       ctx.save();
       ctx.translate(p.sx, p.sy);
@@ -555,10 +714,12 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       if (carSprite) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
+        ctx.filter = SKIN_FILTERS[garage.skin] || "none";
         ctx.rotate(car.heading + CAR_SPRITE_BASE_ROTATION);
-        const lenPx = CAR_LENGTH_M * PX_PER_METER;
+        const lenPx = CAR_LENGTH_M * PX_PER_METER * VEHICLE_CLASSES[vehicleClass].spriteScale;
         const widPx = lenPx * (carSprite.height / carSprite.width);
         ctx.drawImage(carSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
+        ctx.filter = "none";
       } else {
         ctx.rotate(car.heading);
         ctx.fillStyle = offRoad ? "#f0a83f" : "#33e0c2";
@@ -611,8 +772,9 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     }
 
     for (const bot of bots) {
-      if (Math.hypot(bot.x - car.x, bot.y - car.y) > MINIMAP_METERS) continue;
-      const p = toMini(bot.x, bot.y);
+      const botPos = botWorldPos(bot);
+      if (Math.hypot(botPos.x - car.x, botPos.y - car.y) > MINIMAP_METERS) continue;
+      const p = toMini(botPos.x, botPos.y);
       ctx.fillStyle = "#4a90d9";
       ctx.beginPath();
       ctx.arc(p.mx, p.my, 4, 0, Math.PI * 2);
@@ -748,6 +910,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       const input = {
         throttle: Math.max(-1, Math.min(1, kb.throttle + gp.throttle)),
         steer: Math.max(-1, Math.min(1, kb.steer + gp.steer)),
+        handbrake: kb.handbrake || gp.handbrake,
       };
 
       if (raceStartTime === null && (input.throttle !== 0 || input.steer !== 0)) {
@@ -758,11 +921,30 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       const distToRoad = roadData.distanceToNearestRoad(car.x, car.y);
       offRoad = distToRoad > ROAD_HALF_WIDTH_M + OFFROAD_MARGIN_M;
 
-      stepCar(car, input, 1 / 60, !offRoad);
+      const prevX = car.x, prevY = car.y;
+      stepCar(car, input, 1 / 60, !offRoad, vehicleClass);
+      odometerM += Math.hypot(car.x - prevX, car.y - prevY);
+      sessionTopSpeedKmh = Math.max(sessionTopSpeedKmh, Math.abs(car.speed) * 3.6);
 
       const rawDriftDiff = Math.atan2(Math.sin(car.heading - car.velHeading), Math.cos(car.heading - car.velHeading));
+      const driftAmount = Math.min(1, Math.abs(rawDriftDiff) / (55 * Math.PI / 180));
+      const speedFrac = Math.min(1, Math.abs(car.speed) / (offRoad ? MAX_SPEED_OFF_ROAD : MAX_SPEED_ON_ROAD));
       audio.updateEngine(car.speed, offRoad ? MAX_SPEED_OFF_ROAD : MAX_SPEED_ON_ROAD, Math.max(0, input.throttle));
-      audio.updateScreech(Math.min(1, Math.abs(rawDriftDiff) / (55 * Math.PI / 180)));
+      audio.updateScreech(driftAmount);
+      audio.updateMusic(speedFrac);
+
+      if (driftAmount > 0.5) {
+        driftSeconds += 1 / 60;
+        sessionMaxDriftSeconds = Math.max(sessionMaxDriftSeconds, driftSeconds);
+        if (lastSkidX === null || Math.hypot(car.x - lastSkidX, car.y - lastSkidY) >= SKID_MARK_INTERVAL_M) {
+          skidMarks.push({ x: car.x, y: car.y, at: performance.now() });
+          lastSkidX = car.x; lastSkidY = car.y;
+          if (skidMarks.length > 400) skidMarks.splice(0, skidMarks.length - 400);
+        }
+      } else {
+        driftSeconds = 0;
+        lastSkidX = null;
+      }
 
       const anyHonk = stepBots(bots, roadData, 1 / 60, { x: car.x, y: car.y }, car.speed);
       if (anyHonk) audio.playHorn();
@@ -770,7 +952,8 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       if (raceStartTime !== null) {
         let anyCollision = false, anyFatal = false;
         for (const bot of bots) {
-          if (Math.hypot(car.x - bot.x, car.y - bot.y) < COLLISION_DIST_M) {
+          const botPos = botWorldPos(bot);
+          if (Math.hypot(car.x - botPos.x, car.y - botPos.y) < COLLISION_DIST_M) {
             anyCollision = true;
             if ((Math.abs(car.speed) + Math.abs(bot.speed)) * 3.6 > CRASH_COMBINED_KMH) anyFatal = true;
           }
@@ -781,6 +964,29 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
           if (!wasColliding) audio.playBump();
         }
         wasColliding = anyCollision;
+
+        // Roadworks: a firm bump (speed killed, no crash) rather than a fatal
+        // hit — they're static clutter to dodge, not traffic.
+        let anyHazard = false;
+        for (const hz of roadData.nearbyHazards(car.x, car.y)) {
+          if (Math.hypot(car.x - hz.x, car.y - hz.y) < CAR_HITBOX_RADIUS_M + HAZARD_RADIUS_M) { anyHazard = true; break; }
+        }
+        if (anyHazard) {
+          car.speed *= 0.3;
+          if (!wasHazardColliding) audio.playBump();
+        }
+        wasHazardColliding = anyHazard;
+
+        // Nitro: respawns after NITRO_RESPAWN_MS rather than vanishing for
+        // the rest of the race, since it's a recurring resource, not loot.
+        for (const nt of roadData.nearbyNitros(car.x, car.y)) {
+          if (performance.now() - nt.collectedAt < NITRO_RESPAWN_MS) continue;
+          if (Math.hypot(car.x - nt.x, car.y - nt.y) < CAR_HITBOX_RADIUS_M + NITRO_RADIUS_M) {
+            nt.collectedAt = performance.now();
+            giveNitro(car, NITRO_BOOST_SECONDS);
+            sessionNitroUses++;
+          }
+        }
       }
 
       if (raceStartTime !== null) {
@@ -811,6 +1017,30 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       hudTime.textContent = fmtTime(raceStartTime === null ? 0 : (performance.now() - raceStartTime) / 1000);
       hudSpeed.textContent = Math.round(Math.abs(car.speed) * 3.6);
       hudRemaining.textContent = (remainingM / 1000).toFixed(2);
+
+      // Live "ahead/behind" vs whichever ghost is showing (imported takes
+      // priority for this readout when both are active) — a distance-based
+      // comparison (who's closer to the finish right now), not a true time
+      // split, since two different real-road paths can't be matched sample-
+      // for-sample the way a fixed track's distance-along-track can.
+      if (hudSplit) {
+        const g = importedGhost || ghost;
+        const ghosts = activeGhosts();
+        if (showGhost && g && ghosts.includes(g) && raceStartTime !== null) {
+          const gp = ghostPositionAt(g, (performance.now() - raceStartTime) / 1000);
+          if (gp) {
+            const ghostRemaining = Math.hypot(endLocal.x - gp.x, endLocal.y - gp.y);
+            const deltaM = Math.round(ghostRemaining - remainingM);
+            hudSplit.textContent = deltaM >= 0 ? `▲ ${deltaM}m ahead` : `▼ ${-deltaM}m behind`;
+            hudSplit.style.color = deltaM >= 0 ? "#35c37a" : "#ef5350";
+            hudSplit.classList.add("show");
+          } else {
+            hudSplit.classList.remove("show");
+          }
+        } else {
+          hudSplit.classList.remove("show");
+        }
+      }
       offroadBadge.classList.toggle("show", offRoad);
     }
 

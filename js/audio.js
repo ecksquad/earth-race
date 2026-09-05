@@ -14,6 +14,7 @@ let engineBuffer = null, engineSource = null, engineGain = null;
 let hornBuffer = null;
 let noiseBuffer = null;
 let screechSource = null, screechGain = null;
+let musicOsc1 = null, musicOsc2 = null, musicFilter = null, musicGain = null;
 let muted = localStorage.getItem(MUTE_KEY) === "1";
 
 // The idle loop is a fixed recording, not a synthesized waveform — pitch (and
@@ -57,6 +58,26 @@ function ensureContext() {
   loadEngineSample();
   loadHornSample();
 
+  // Ambient pad, not a real music track (no asset for that) — two slightly
+  // detuned oscillators through a lowpass whose cutoff opens up with speed,
+  // so faster driving reads as more energy without a literal volume ramp.
+  musicGain = ctx.createGain();
+  musicGain.gain.value = 0;
+  musicFilter = ctx.createBiquadFilter();
+  musicFilter.type = "lowpass";
+  musicFilter.frequency.value = 300;
+  musicFilter.connect(musicGain).connect(masterGain);
+  musicOsc1 = ctx.createOscillator();
+  musicOsc1.type = "sawtooth";
+  musicOsc1.frequency.value = 110;
+  musicOsc2 = ctx.createOscillator();
+  musicOsc2.type = "sawtooth";
+  musicOsc2.frequency.value = 110 * 1.005; // slight detune for a wider pad
+  musicOsc1.connect(musicFilter);
+  musicOsc2.connect(musicFilter);
+  musicOsc1.start();
+  musicOsc2.start();
+
   const len = ctx.sampleRate * 1;
   noiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
   const data = noiseBuffer.getChannelData(0);
@@ -91,6 +112,18 @@ export function updateEngine(speedMs, maxSpeedMs, throttleMag) {
   const rate = 0.8 + speedFrac * 1.7 + throttleMag * 0.2;
   engineSource.playbackRate.setTargetAtTime(rate, ctx.currentTime, 0.08);
   engineGain.gain.setTargetAtTime(0.1 + speedFrac * 0.16, ctx.currentTime, 0.08);
+}
+
+// speedFrac 0..1 (of the current road's max speed) — opens the pad's filter
+// and nudges its volume/pitch up with speed. Deliberately subtle: this is
+// ambience under the engine/screech, not a lead instrument.
+export function updateMusic(speedFrac) {
+  if (!ctx) return;
+  musicFilter.frequency.setTargetAtTime(250 + speedFrac * 1800, ctx.currentTime, 0.3);
+  musicGain.gain.setTargetAtTime(0.03 + speedFrac * 0.05, ctx.currentTime, 0.3);
+  const freq = 110 + speedFrac * 40;
+  musicOsc1.frequency.setTargetAtTime(freq, ctx.currentTime, 0.3);
+  musicOsc2.frequency.setTargetAtTime(freq * 1.005, ctx.currentTime, 0.3);
 }
 
 // intensity 0..1 — how hard the car is currently sliding (see drive.js's

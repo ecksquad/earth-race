@@ -9,6 +9,8 @@ import { startDrive } from "./drive.js";
 import { initCollectablesUI } from "./collectablesUI.js";
 import { isMuted, setMuted } from "./audio.js";
 import { connect as connectMultiplayer, isMultiplayerAvailable, getOnlineCount, getPlayerName, setPlayerName } from "./multiplayer.js";
+import { initGarageUI } from "./garageUI.js";
+import { initStatsUI } from "./statsUI.js";
 
 const pickerScreen = document.getElementById("screen-picker");
 const driveScreen = document.getElementById("screen-drive");
@@ -64,6 +66,8 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
 
 const picker = initPicker(onConfirmStart);
 initCollectablesUI();
+initGarageUI();
+initStatsUI();
 
 const muteBtn = document.getElementById("mute-btn");
 function refreshMuteBtn() { muteBtn.textContent = isMuted() ? "🔇" : "🔊"; }

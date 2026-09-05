@@ -168,6 +168,25 @@ async function findLandmarkNear(lat, lng, radiusM) {
   }
 }
 
+// A lightweight flavor name for routes that didn't land on a real named
+// landmark — based on distance tier + compass direction from the start, not
+// actual terrain analysis (no elevation/land-cover data available here), so
+// it's "The Coastal..." in name only if you happen to be near a coast.
+const DISTANCE_STYLES = [
+  { max: 5, words: ["Sprint", "Dash", "Quick Run", "Jaunt"] },
+  { max: 50, words: ["Cruise", "Circuit", "Drive", "Loop"] },
+  { max: 300, words: ["Expedition", "Trek", "Run", "Haul"] },
+  { max: Infinity, words: ["Odyssey", "Crossing", "Marathon", "Pilgrimage"] },
+];
+const COMPASS = ["North", "Northeast", "East", "Southeast", "South", "Southwest", "West", "Northwest"];
+
+function generateRouteFlavorName(distanceKm, bearingDeg) {
+  const style = DISTANCE_STYLES.find(s => distanceKm <= s.max);
+  const word = style.words[Math.floor(Math.random() * style.words.length)];
+  const dirIdx = Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8;
+  return `${word} to the ${COMPASS[dirIdx]}`;
+}
+
 // v1 simplification: this matches the requested distance as a straight-line
 // (great-circle) distance to a real point on a road, not actual road-network
 // driving distance — an exact version needs a full routing engine, which is
@@ -194,7 +213,7 @@ export async function generateEndpoint(startLat, startLng, distanceKm) {
     const bearing = randomBearing();
     const candidate = destinationPoint(startLat, startLng, bearing, distanceKm);
     const snapped = await snapToNearestRoad(candidate.lat, candidate.lng);
-    if (snapped) return snapped;
+    if (snapped) return { ...snapped, name: generateRouteFlavorName(distanceKm, bearing) };
   }
   throw new Error("Could not find a road near the target distance/direction — try again.");
 }

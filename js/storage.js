@@ -137,3 +137,88 @@ export function markCollected(id) {
     saveCollectedRaw(ids);
   }
 }
+
+// Lifetime stats — a running odometer/counter set, independent of any one
+// race, used both for the stats dashboard and to evaluate achievements.
+const STATS_KEY = "earthrace.stats";
+const DEFAULT_STATS = {
+  totalKm: 0, totalRaces: 0, totalCrashes: 0, topSpeedKmh: 0,
+  nitroUses: 0, maxDriftSeconds: 0, regionsVisited: [],
+};
+
+export function getStats() {
+  try {
+    return { ...DEFAULT_STATS, ...JSON.parse(localStorage.getItem(STATS_KEY) || "{}") };
+  } catch {
+    return { ...DEFAULT_STATS };
+  }
+}
+
+// Shallow-merges partial updates into the running stats — callers pass only
+// what changed (e.g. { totalCrashes: stats.totalCrashes + 1 }) rather than
+// re-deriving the whole object, so two different call sites in the same
+// frame can't clobber each other's unrelated fields.
+export function updateStats(partial) {
+  const stats = getStats();
+  Object.assign(stats, partial);
+  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  return stats;
+}
+
+export function addRegionVisited(region) {
+  const stats = getStats();
+  if (!stats.regionsVisited.includes(region)) {
+    stats.regionsVisited.push(region);
+    localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  }
+  return stats;
+}
+
+// Achievements: fixed definitions (see achievements.js) + a persisted set of
+// unlocked ids. checkAchievements() in achievements.js decides what's newly
+// earned; storage.js just remembers which ones already were.
+const ACHIEVEMENTS_KEY = "earthrace.achievements";
+
+export function getUnlockedAchievements() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(ACHIEVEMENTS_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+export function unlockAchievement(id) {
+  const unlocked = getUnlockedAchievements();
+  if (unlocked.has(id)) return false;
+  unlocked.add(id);
+  localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify([...unlocked]));
+  return true; // true only the first time — callers use this to trigger a toast
+}
+
+// Garage: selected vehicle class/skin + which skins have been unlocked.
+const GARAGE_KEY = "earthrace.garage";
+const DEFAULT_GARAGE = { vehicleClass: "car", skin: "default", unlockedSkins: ["default"] };
+
+export function getGarage() {
+  try {
+    return { ...DEFAULT_GARAGE, ...JSON.parse(localStorage.getItem(GARAGE_KEY) || "{}") };
+  } catch {
+    return { ...DEFAULT_GARAGE };
+  }
+}
+
+export function setGarage(partial) {
+  const garage = getGarage();
+  Object.assign(garage, partial);
+  localStorage.setItem(GARAGE_KEY, JSON.stringify(garage));
+  return garage;
+}
+
+export function unlockSkin(skinId) {
+  const garage = getGarage();
+  if (!garage.unlockedSkins.includes(skinId)) {
+    garage.unlockedSkins.push(skinId);
+    localStorage.setItem(GARAGE_KEY, JSON.stringify(garage));
+  }
+  return garage;
+}
