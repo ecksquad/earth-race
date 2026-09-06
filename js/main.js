@@ -27,7 +27,7 @@ function showDrive() {
   driveScreen.classList.add("active");
 }
 
-async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
+async function onConfirmStart(startLat, startLng, distanceKm, manualEnd, waypoints = []) {
   // Snap the start point onto a real road too — otherwise a click that lands
   // just off a road (a park, a block interior, open field) spawns the car
   // somewhere with no nearby road tiles to load, and the drive screen has
@@ -53,6 +53,20 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
   const car = createCar(0, 0, 0);
   const endLocal = roadData.project(end.lat, end.lng);
 
+  // Each typed waypoint (see picker.js's Plan Route panel) gets snapped onto
+  // a real road too, same as the start/end — one that fails to snap (e.g. a
+  // landmark search result that landed in open water) is just skipped rather
+  // than failing the whole race, since waypoints are a guide, not a
+  // requirement.
+  const waypointsLocal = [];
+  for (const wp of waypoints) {
+    const snappedWp = await snapToNearestRoad(wp.lat, wp.lng);
+    if (snappedWp) {
+      const local = roadData.project(snappedWp.lat, snappedWp.lng);
+      waypointsLocal.push({ x: local.x, y: local.y, name: wp.name });
+    }
+  }
+
   showDrive();
   startDrive(
     {
@@ -60,6 +74,7 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
       endLatLng: end,
       startLatLng: { lat: snappedStart.lat, lng: snappedStart.lng },
       distanceKm: actualDistanceKm,
+      waypoints: waypointsLocal,
     },
     { onBack: showPicker }
   );

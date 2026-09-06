@@ -3,7 +3,7 @@
 // state, so a future 3D renderer can be added alongside it without touching
 // physics or road logic.
 
-import { stepCar, MAX_SPEED_ON_ROAD, MAX_SPEED_OFF_ROAD, VEHICLE_CLASSES, giveNitro } from "./car.js";
+import { stepCar, MAX_SPEED_ON_ROAD, MAX_SPEED_OFF_ROAD, VEHICLE_CLASSES, RELEASED_VEHICLE_CLASSES, giveNitro } from "./car.js";
 import {
   ROAD_HALF_WIDTH_M, OFFROAD_MARGIN_M,
   NITRO_RADIUS_M, NITRO_RESPAWN_MS, NITRO_BOOST_SECONDS,
@@ -42,18 +42,21 @@ const SKIN_FILTERS = {
   flame: "saturate(2.5) hue-rotate(-40deg) brightness(1.1)",
 };
 
-// The source image's nose points along its own +x (the engine-vent panel is
-// the rear), so bringing it to "nose up" at heading 0 needs a -90° twist
-// before car.heading is applied on top.
+// The car source image's nose points along its own +x (the engine-vent panel
+// is the rear), so bringing it to "nose up" at heading 0 needs a -90° twist
+// before car.heading is applied on top. The bike source image's nose (front
+// wheel/handlebars) points the opposite way, along its own -x, so it needs
+// the opposite (+90°) twist instead.
 const CAR_SPRITE_BASE_ROTATION = -Math.PI / 2;
+const BIKE_SPRITE_BASE_ROTATION = Math.PI / 2;
 
-// The source PNG is huge (3848px) but drawn at only ~20px in-game — letting
-// the browser downscale that ~170:1 ratio live, every frame, produces visible
-// aliasing/moiré. Pre-downsample once with high-quality smoothing instead.
-let carSprite = null;
-{
+// Loads and pre-downsamples a top-down vehicle sprite once at load time —
+// source PNGs are much higher-res than the ~20px they're drawn at in-game,
+// and letting the browser downscale that live, every frame, produces visible
+// aliasing/moiré.
+function loadSprite(path, onReady) {
   const raw = new Image();
-  raw.src = "assets/car-top.png";
+  raw.src = path;
   raw.addEventListener("load", () => {
     const targetW = 480;
     const targetH = Math.round(targetW * (raw.naturalHeight / raw.naturalWidth));
@@ -64,8 +67,22 @@ let carSprite = null;
     octx.imageSmoothingEnabled = true;
     octx.imageSmoothingQuality = "high";
     octx.drawImage(raw, 0, 0, targetW, targetH);
-    carSprite = off;
+    onReady(off);
   });
+}
+
+let carSprite = null;
+let bikeSprite = null;
+loadSprite("assets/car-top.png", (sprite) => { carSprite = sprite; });
+loadSprite("assets/bike-top.png", (sprite) => { bikeSprite = sprite; });
+
+// Which sprite + rotation twist to use for a given vehicle class — only the
+// player's own car currently varies (bots/ghosts/other players always render
+// as the base car sprite; see their draw calls further down).
+function spriteFor(vehicleClass) {
+  return vehicleClass === "bike"
+    ? { sprite: bikeSprite, baseRotation: BIKE_SPRITE_BASE_ROTATION }
+    : { sprite: carSprite, baseRotation: CAR_SPRITE_BASE_ROTATION };
 }
 
 const MINIMAP_MARGIN = 20;
@@ -118,7 +135,7 @@ function readGamepadInput() {
   return { throttle: Math.max(-1, Math.min(1, throttle)), steer: Math.max(-1, Math.min(1, steer)), handbrake };
 }
 
-export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm, raceMode }, { onBack }) {
+export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm, raceMode, waypoints = [] }, { onBack }) {
   const isGp = !!(raceMode && raceMode.type === "gp");
   const canvas = document.getElementById("gamecanvas");
   const ctx = canvas.getContext("2d");
@@ -271,11 +288,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // storage.js/achievements.js) — purely handling stats + a sprite tint/scale,
   // not new art.
   const garage = getGarage();
-  // Only "car" is actually released (see garageUI.js's RELEASED_VEHICLE_CLASSES)
-  // — bike/truck exist as tuned stats for later, so any stored selection
-  // other than car (e.g. left over from pre-release testing) is ignored
-  // rather than silently applying an unreleased handling profile.
-  const vehicleClass = "car";
+  // Truck exists only as tuned stats for later (see car.js's
+  // RELEASED_VEHICLE_CLASSES) — a stored selection of anything unreleased
+  // (e.g. left over from pre-release testing) falls back to car rather than
+  // silently applying a handling profile with no matching sprite.
+  const vehicleClass = RELEASED_VEHICLE_CLASSES.includes(garage.vehicleClass) ? garage.vehicleClass : "car";
 
   // Lifetime stats/achievements: driftSeconds/topSpeedKmh/nitroUses accumulate
   // through the race and get folded into storage.js's running totals on
@@ -309,6 +326,12 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     const ll = roadData.unproject(car.x, car.y);
     return { lat: ll.lat, lng: ll.lng, heading: car.heading, speed: car.speed };
   });
+
+  // Waypoints (see picker.js's Plan Route panel): reached in order, purely a
+  // guide (never blocks finishing the race) — used for finding a specific
+  // bridge/road/landmark along the way rather than just the endpoint.
+  let nextWaypointIndex = 0;
+  const WAYPOINT_RADIUS_M = 25;
 
   let raceStartTime = null;
   let finished = false;
@@ -847,14 +870,15 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     } else {
       ctx.save();
       ctx.translate(carPt.sx, carPt.sy);
-      if (carSprite) {
+      const { sprite: playerSprite, baseRotation: playerBaseRotation } = spriteFor(vehicleClass);
+      if (playerSprite) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
         ctx.filter = SKIN_FILTERS[garage.skin] || "none";
-        ctx.rotate(car.heading + CAR_SPRITE_BASE_ROTATION);
+        ctx.rotate(car.heading + playerBaseRotation);
         const lenPx = CAR_LENGTH_M * PX_PER_METER * VEHICLE_CLASSES[vehicleClass].spriteScale;
-        const widPx = lenPx * (carSprite.height / carSprite.width);
-        ctx.drawImage(carSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
+        const widPx = lenPx * (playerSprite.height / playerSprite.width);
+        ctx.drawImage(playerSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
         ctx.filter = "none";
       } else {
         ctx.rotate(car.heading);
@@ -942,10 +966,26 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.fill();
     }
 
-    const dx = endLocal.x - car.x, dy = endLocal.y - car.y;
+    // Waypoints beyond the immediate next one — shown so the whole planned
+    // route is visible, not just wherever you're headed right now.
+    for (let i = nextWaypointIndex + 1; i < waypoints.length; i++) {
+      const wp = waypoints[i];
+      if (Math.hypot(wp.x - car.x, wp.y - car.y) > MINIMAP_METERS) continue;
+      const p = toMini(wp.x, wp.y);
+      ctx.fillStyle = "#ffa726";
+      ctx.beginPath();
+      ctx.arc(p.mx, p.my, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // The current target: the next unvisited waypoint if any remain,
+    // otherwise the actual finish — the heading arrow always points at
+    // whichever this is, per the Plan Route feature (see picker.js).
+    const target = nextWaypointIndex < waypoints.length ? waypoints[nextWaypointIndex] : endLocal;
+    const dx = target.x - car.x, dy = target.y - car.y;
     const distToEnd = Math.hypot(dx, dy);
     if (distToEnd <= MINIMAP_METERS) {
-      const p = toMini(endLocal.x, endLocal.y);
+      const p = toMini(target.x, target.y);
       ctx.fillStyle = "#ef5350";
       ctx.beginPath();
       ctx.arc(p.mx, p.my, 5, 0, Math.PI * 2);
@@ -953,7 +993,8 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     }
     ctx.restore();
 
-    // Waypoint blip: when the destination is off the minimap, show an arrow
+    // Waypoint blip: when the current target (next waypoint, or the finish
+    // once all waypoints are visited) is off the minimap, show an arrow
     // clamped to the rim pointing in its direction (GTA-style radar beacon).
     if (distToEnd > MINIMAP_METERS) {
       const angle = Math.atan2(dx, dy);
@@ -1007,7 +1048,8 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     ctx.fillRect(0, 0, w, h);
 
     const pad = 60;
-    const xs = [0, endLocal.x, car.x], ys = [0, endLocal.y, car.y];
+    const xs = [0, endLocal.x, car.x, ...waypoints.map(w => w.x)];
+    const ys = [0, endLocal.y, car.y, ...waypoints.map(w => w.y)];
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
@@ -1029,18 +1071,36 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
     const s = toOverview(0, 0), e = toOverview(endLocal.x, endLocal.y), c = toOverview(car.x, car.y);
 
+    // Route line runs through every waypoint in order, not just start->end —
+    // this is the "next waypoint" the heading arrow points at, laid out on
+    // the wider view "M" gives you (see the Plan Route panel in picker.js).
+    const routePts = [{ x: 0, y: 0 }, ...waypoints, endLocal];
     ctx.strokeStyle = "rgba(255,255,255,.5)";
     ctx.lineWidth = 2;
     ctx.setLineDash([8, 8]);
     ctx.beginPath();
-    ctx.moveTo(s.sx, s.sy);
-    ctx.lineTo(e.sx, e.sy);
+    routePts.forEach((p, i) => {
+      const sp = toOverview(p.x, p.y);
+      if (i === 0) ctx.moveTo(sp.sx, sp.sy); else ctx.lineTo(sp.sx, sp.sy);
+    });
     ctx.stroke();
     ctx.setLineDash([]);
 
     ctx.fillStyle = "#35c37a";
     ctx.beginPath(); ctx.arc(s.sx, s.sy, 8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#ef5350";
+
+    waypoints.forEach((wp, i) => {
+      const p = toOverview(wp.x, wp.y);
+      const isNext = i === nextWaypointIndex;
+      const isPast = i < nextWaypointIndex;
+      ctx.fillStyle = isPast ? "rgba(255,255,255,.35)" : isNext ? "#ef5350" : "#ffa726";
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, isNext ? 9 : 6, 0, Math.PI * 2); ctx.fill();
+    });
+
+    // The finish marker is the bright "current target" red only once every
+    // waypoint's been visited — otherwise it's dimmed, since the next
+    // waypoint (drawn above) is what you're actually headed toward.
+    ctx.fillStyle = nextWaypointIndex >= waypoints.length ? "#ef5350" : "rgba(239,83,80,.4)";
     ctx.beginPath(); ctx.arc(e.sx, e.sy, 8, 0, Math.PI * 2); ctx.fill();
 
     ctx.save();
@@ -1159,6 +1219,14 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
           collectables.splice(i, 1);
           collectProgressBadge.textContent = `${getCollectedIds().size} / 1000`;
           queueCollectToast(c);
+        }
+      }
+
+      if (nextWaypointIndex < waypoints.length) {
+        const wp = waypoints[nextWaypointIndex];
+        if (Math.hypot(car.x - wp.x, car.y - wp.y) < WAYPOINT_RADIUS_M) {
+          nextWaypointIndex++;
+          queueCollectToast({ icon: "📍", name: `Waypoint ${nextWaypointIndex} / ${waypoints.length}`, rarity: wp.name });
         }
       }
 

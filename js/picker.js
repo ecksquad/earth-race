@@ -10,7 +10,7 @@
 // reloaded later from the chip list, instead of re-clicking the map.
 
 import { saveRoute, loadRoutes, deleteRoute } from "./storage.js";
-import { haversineDistanceKm } from "./geo.js";
+import { haversineDistanceKm, geocodePlace } from "./geo.js";
 import { resumeAudio } from "./audio.js";
 import { REGIONS } from "./collectables.js";
 import { GRAND_PRIX_CIRCUITS, LAP_OPTIONS } from "./grandprix.js";
@@ -39,6 +39,8 @@ export function initPicker(onConfirm, onConfirmGp) {
   let start = null;
   let end = null;
   let distanceKm = null;
+  let waypoints = []; // {lat, lng, name}[], in order — see the Plan Route panel below
+  const waypointMarkers = [];
 
   const statusEl = document.getElementById("picker-status");
   const hintEl = document.querySelector("#picker-panel .hint");
@@ -54,6 +56,15 @@ export function initPicker(onConfirm, onConfirmGp) {
   const gpCircuitsEl = document.getElementById("gp-circuits");
   const gpLapButtons = [];
   const gpGoBtn = document.getElementById("gp-go-btn");
+  const planToggleBtn = document.getElementById("plan-toggle-btn");
+  const planPanel = document.getElementById("plan-panel");
+  const startPlaceInput = document.getElementById("start-place-input");
+  const startPlaceBtn = document.getElementById("start-place-btn");
+  const endPlaceInput = document.getElementById("end-place-input");
+  const endPlaceBtn = document.getElementById("end-place-btn");
+  const waypointInput = document.getElementById("waypoint-input");
+  const waypointAddBtn = document.getElementById("waypoint-add-btn");
+  const waypointsListEl = document.getElementById("waypoints-list");
 
   function updateUI() {
     goBtn.disabled = !(start && (end || distanceKm > 0));
@@ -68,19 +79,64 @@ export function initPicker(onConfirm, onConfirmGp) {
     end = null;
   }
 
+  function clearWaypoints() {
+    waypoints = [];
+    waypointMarkers.forEach(m => m.remove());
+    waypointMarkers.length = 0;
+    renderWaypoints();
+  }
+
+  // Shared by a map click and the Plan Route panel's "Find" button — a fresh
+  // start point clears everything downstream of it (end point, distance,
+  // waypoints), since they were only ever meaningful relative to the old one.
+  function setStart(pt) {
+    start = pt;
+    clearEnd();
+    clearWaypoints();
+    distButtons.forEach(b => b.classList.remove("selected"));
+    distanceKm = null;
+    customKmEl.value = "";
+    if (marker) marker.remove();
+    marker = L.marker(start).addTo(map);
+  }
+
+  function setEnd(pt) {
+    end = pt;
+    if (endMarker) endMarker.remove();
+    endMarker = L.circleMarker(end, { radius: 9, color: "#fff", weight: 2, fillColor: "#ef5350", fillOpacity: 0.9 }).addTo(map);
+    distButtons.forEach(b => b.classList.remove("selected"));
+    distanceKm = null;
+  }
+
+  function renderWaypoints() {
+    waypointsListEl.innerHTML = "";
+    waypoints.forEach((wp, i) => {
+      const chip = document.createElement("div");
+      chip.className = "route-chip";
+      const label = document.createElement("span");
+      label.textContent = `${i + 1}. ${wp.name}`;
+      chip.appendChild(label);
+      const del = document.createElement("button");
+      del.textContent = "×";
+      del.title = "Remove waypoint";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        waypoints.splice(i, 1);
+        const [removed] = waypointMarkers.splice(i, 1);
+        if (removed) removed.remove();
+        renderWaypoints();
+      });
+      chip.appendChild(del);
+      waypointsListEl.appendChild(chip);
+    });
+  }
+
   // Jumps straight back into a previously saved (start, end) pair instead of
   // re-clicking the map — mirrors the "exact end point" state a manual
   // second click would produce.
   function loadRoute(route) {
-    start = { lat: route.startLat, lng: route.startLng };
-    end = { lat: route.endLat, lng: route.endLng };
-    distanceKm = null;
-    distButtons.forEach(b => b.classList.remove("selected"));
-    customKmEl.value = "";
-    if (marker) marker.remove();
-    marker = L.marker(start).addTo(map);
-    if (endMarker) endMarker.remove();
-    endMarker = L.circleMarker(end, { radius: 9, color: "#fff", weight: 2, fillColor: "#ef5350", fillOpacity: 0.9 }).addTo(map);
+    setStart({ lat: route.startLat, lng: route.startLng });
+    setEnd({ lat: route.endLat, lng: route.endLng });
     map.fitBounds([[start.lat, start.lng], [end.lat, end.lng]], { padding: [40, 40] });
     statusEl.textContent = "";
     updateUI();
@@ -114,22 +170,11 @@ export function initPicker(onConfirm, onConfirmGp) {
 
   map.on("click", (e) => {
     const pt = { lat: e.latlng.lat, lng: e.latlng.lng };
-    if (!start || end) {
-      // Fresh start (either the very first click, or starting over after both were set).
-      start = pt;
-      clearEnd();
-      distButtons.forEach(b => b.classList.remove("selected"));
-      distanceKm = null;
-      customKmEl.value = "";
-      if (marker) marker.remove();
-      marker = L.marker(start).addTo(map);
-    } else {
-      end = pt;
-      if (endMarker) endMarker.remove();
-      endMarker = L.circleMarker(end, { radius: 9, color: "#fff", weight: 2, fillColor: "#ef5350", fillOpacity: 0.9 }).addTo(map);
-      distButtons.forEach(b => b.classList.remove("selected"));
-      distanceKm = null;
-    }
+    // Fresh start (either the very first click, or starting over after both
+    // were set) vs. setting the end point — same two cases setStart/setEnd
+    // handle for the Plan Route panel's typed inputs.
+    if (!start || end) setStart(pt);
+    else setEnd(pt);
     statusEl.textContent = "";
     updateUI();
   });
@@ -157,7 +202,7 @@ export function initPicker(onConfirm, onConfirmGp) {
     goBtn.disabled = true;
     statusEl.textContent = manualEnd ? "Finding a road near your end point…" : "Finding an end point on real roads…";
     try {
-      await onConfirm(startLat, startLng, km, manualEnd);
+      await onConfirm(startLat, startLng, km, manualEnd, waypoints);
     } catch (err) {
       console.error(err);
       statusEl.textContent = err.message || "Something went wrong — try a different point/distance.";
@@ -266,6 +311,59 @@ export function initPicker(onConfirm, onConfirmGp) {
       gpGoBtn.disabled = false;
     }
   });
+
+  // Plan Route: type real place names for the start/end point instead of
+  // clicking the map, plus an ordered list of waypoints — real places
+  // (a bridge, a specific road, a landmark) the drive screen will guide you
+  // toward in order via the minimap before finally aiming at the end point.
+  // Geocoded through Nominatim (geo.js); each typed place also drops a
+  // marker on the map exactly like a click would, so both input methods stay
+  // interchangeable (you can type a start then click to adjust the end, etc).
+  planToggleBtn.addEventListener("click", () => planPanel.classList.toggle("show"));
+
+  async function findPlace(input, btn, onFound) {
+    const q = input.value.trim();
+    if (!q) return;
+    btn.disabled = true;
+    statusEl.textContent = "Finding place…";
+    try {
+      const place = await geocodePlace(q);
+      if (!place) { statusEl.textContent = `Couldn't find "${q}".`; return; }
+      onFound(place);
+      statusEl.textContent = "";
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = err.message || "Place search failed — try again.";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  startPlaceBtn.addEventListener("click", () => findPlace(startPlaceInput, startPlaceBtn, (place) => {
+    setStart({ lat: place.lat, lng: place.lng });
+    map.setView([place.lat, place.lng], 13);
+    updateUI();
+  }));
+
+  endPlaceBtn.addEventListener("click", () => findPlace(endPlaceInput, endPlaceBtn, (place) => {
+    if (!start) { statusEl.textContent = "Set a start point first."; return; }
+    setEnd({ lat: place.lat, lng: place.lng });
+    map.fitBounds([[start.lat, start.lng], [place.lat, place.lng]], { padding: [40, 40] });
+    updateUI();
+  }));
+
+  waypointAddBtn.addEventListener("click", () => findPlace(waypointInput, waypointAddBtn, (place) => {
+    waypoints.push(place);
+    waypointMarkers.push(
+      L.marker([place.lat, place.lng], { opacity: 0.8 }).bindTooltip(`${waypoints.length}. ${place.name}`).addTo(map)
+    );
+    waypointInput.value = "";
+    renderWaypoints();
+  }));
+
+  for (const [input, btn] of [[startPlaceInput, startPlaceBtn], [endPlaceInput, endPlaceBtn], [waypointInput, waypointAddBtn]]) {
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") btn.click(); });
+  }
 
   updateUI();
   renderSavedRoutes();

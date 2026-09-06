@@ -88,6 +88,21 @@
     padding:10px 22px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px var(--accent-soft)}
   #gp-go-btn:disabled{opacity:.4;cursor:default;box-shadow:none}
 
+  #plan-toggle-btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:20px;
+    padding:9px 16px;font-size:13px;cursor:pointer}
+  #plan-toggle-btn:hover{border-color:var(--accent)}
+  #plan-panel{flex:1 1 100%;display:none;flex-direction:column;gap:10px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:12px;padding:14px}
+  #plan-panel.show{display:flex}
+  .plan-row{display:flex;gap:8px}
+  .plan-row input{flex:1;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+    border-radius:20px;padding:9px 14px;font-size:13px}
+  .plan-row button{background:var(--accent);color:var(--accent-ink);border:none;border-radius:20px;
+    padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .plan-row button:disabled{opacity:.5;cursor:default}
+  #waypoints-list{display:flex;flex-wrap:wrap;gap:8px}
+  #waypoints-list:empty{display:none}
+
   /* --- drive screen --- */
   /* Prevent native pinch-zoom/pan on touch devices — the picker screen's
      Leaflet map handles its own touch gestures internally, but the drive
@@ -231,7 +246,7 @@
 <body>
   <header>
     <h1>EARTH RACE</h1>
-    <span class="sub">drive the real world, on the roads — WASD / arrow keys / gamepad</span>
+    <span class="sub">drive the real world, on the roads — WASD / arrow keys / gamepad, SPACE handbrake, M map</span>
     <span id="online-badge" title="Other players currently driving, anywhere on Earth">👥 0 online</span>
     <button id="mute-btn" title="Mute/unmute sound">🔊</button>
     <button id="garage-btn" title="Garage: vehicle &amp; skin">🚗</button>
@@ -260,6 +275,23 @@
         <div id="gp-circuits"></div>
         <div id="gp-laps"></div>
         <button id="gp-go-btn" disabled>Start Grand Prix</button>
+      </div>
+      <button id="plan-toggle-btn">📍 Plan Route</button>
+      <div id="plan-panel">
+        <div class="hint">Type real places for your start/end point, and add waypoints along the way — a bridge, a specific road, a landmark. The drive screen's minimap will guide you to each in order.</div>
+        <div class="plan-row">
+          <input id="start-place-input" type="text" placeholder="Start place (e.g. Golden Gate Bridge)">
+          <button id="start-place-btn">Find</button>
+        </div>
+        <div class="plan-row">
+          <input id="end-place-input" type="text" placeholder="End place">
+          <button id="end-place-btn">Find</button>
+        </div>
+        <div class="plan-row">
+          <input id="waypoint-input" type="text" placeholder="Add a waypoint">
+          <button id="waypoint-add-btn">Add</button>
+        </div>
+        <div id="waypoints-list"></div>
       </div>
     </div>
   </section>

@@ -218,4 +218,21 @@ export async function generateEndpoint(startLat, startLng, distanceKm) {
   throw new Error("Could not find a road near the target distance/direction — try again.");
 }
 
+// Nominatim (OSM's free geocoder) — turns a typed place name into a real
+// point, for the picker's planning stage (type a start/end/waypoint by name
+// — "Golden Gate Bridge", "Suzuka Circuit" — instead of clicking the map).
+// Takes only the single best match; good enough for a specific landmark or
+// road name, not meant to disambiguate a genuinely ambiguous query.
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+
+export async function geocodePlace(query) {
+  const url = `${NOMINATIM_URL}?format=json&limit=1&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Place search failed — try again in a moment.");
+  const results = await res.json();
+  if (!results.length) return null;
+  const r = results[0];
+  return { lat: Number(r.lat), lng: Number(r.lon), name: r.display_name.split(",")[0] };
+}
+
 export { bboxAround };
