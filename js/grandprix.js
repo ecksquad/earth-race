@@ -21,3 +21,21 @@ export const GRAND_PRIX_CIRCUITS = [
 ];
 
 export const LAP_OPTIONS = [1, 3, 5, 10];
+
+// A rough circular lap loop of the right circumference (lapKm), used purely
+// as a starting guess for where "the track" is before each point gets
+// snapped onto a real nearby road (see main.js's onConfirmGrandPrix) — real
+// circuits obviously aren't perfect circles, but with no routing graph to
+// follow an actual racing line (see bots.js), this is what gives the
+// minimap's track guide (see drive.js) something road-shaped to hug instead
+// of a straight line through whatever's in the way.
+export function buildTrackWaypoints(circuit, count = 24) {
+  const radiusM = Math.max(150, (circuit.lapKm * 1000) / (2 * Math.PI));
+  const baseAngle = circuit.heading * Math.PI / 180;
+  const points = [];
+  for (let i = 0; i < count; i++) {
+    const angle = baseAngle + (i / count) * Math.PI * 2;
+    points.push({ x: Math.sin(angle) * radiusM, y: Math.cos(angle) * radiusM });
+  }
+  return points;
+}

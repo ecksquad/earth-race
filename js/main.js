@@ -11,6 +11,7 @@ import { isMuted, setMuted } from "./audio.js";
 import { connect as connectMultiplayer, isMultiplayerAvailable, getOnlineCount, getPlayerName, setPlayerName } from "./multiplayer.js";
 import { initGarageUI } from "./garageUI.js";
 import { initStatsUI } from "./statsUI.js";
+import { buildTrackWaypoints } from "./grandprix.js";
 
 const pickerScreen = document.getElementById("screen-picker");
 const driveScreen = document.getElementById("screen-drive");
@@ -64,6 +65,28 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
   );
 }
 
+// Snaps each raw (geometric-circle) waypoint onto the nearest real road once
+// its tile has loaded, so the minimap's Grand Prix track guide (see
+// drive.js) hugs actual streets instead of a straight line through whatever
+// happens to be in the way. Loading is fire-and-forget (roads.js), so this
+// polls, re-nudging any tile that hasn't arrived yet, until every waypoint
+// has *something* nearby or the timeout is hit — whichever waypoints never
+// get a nearby road just keep their raw circle position as a fallback.
+async function buildGpTrackPoints(roadData, circuit, timeoutMs = 6000) {
+  const raw = buildTrackWaypoints(circuit);
+  const deadline = Date.now() + timeoutMs;
+  let pending = raw;
+  while (pending.length > 0 && Date.now() < deadline) {
+    for (const p of pending) roadData.ensureLoaded(p.x, p.y);
+    await new Promise((r) => setTimeout(r, 200));
+    pending = pending.filter((p) => roadData.nearbySegments(p.x, p.y).length === 0);
+  }
+  return raw.map((p) => {
+    const snapped = roadData.nearestPointOnRoad(p.x, p.y);
+    return snapped && snapped.dist < 120 ? { x: snapped.x, y: snapped.y } : p;
+  });
+}
+
 async function onConfirmGrandPrix(circuit, laps) {
   const snapped = await snapToNearestRoad(circuit.lat, circuit.lng);
   if (!snapped) {
@@ -72,6 +95,7 @@ async function onConfirmGrandPrix(circuit, laps) {
 
   const roadData = new RoadData(snapped.lat, snapped.lng);
   const car = createCar(0, 0, circuit.heading * Math.PI / 180);
+  const trackPoints = await buildGpTrackPoints(roadData, circuit);
 
   showDrive();
   startDrive(
@@ -81,7 +105,7 @@ async function onConfirmGrandPrix(circuit, laps) {
       endLatLng: { lat: snapped.lat, lng: snapped.lng },
       startLatLng: { lat: snapped.lat, lng: snapped.lng },
       distanceKm: circuit.lapKm * laps,
-      raceMode: { type: "gp", circuit, laps },
+      raceMode: { type: "gp", circuit, laps, trackPoints },
     },
     { onBack: showPicker }
   );

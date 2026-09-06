@@ -896,15 +896,31 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     ctx.fillStyle = "rgba(10,14,19,.45)"; // dim the imagery so lines/icons stay legible
     ctx.fill();
 
-    ctx.strokeStyle = "rgba(255, 224, 130, 0.6)";
-    ctx.lineWidth = 3;
     ctx.lineCap = "round";
-    for (const s of roadData.nearbySegments(car.x, car.y)) {
-      const a = toMini(s.x1, s.y1), b = toMini(s.x2, s.y2);
+    if (isGp) {
+      // Only the Grand Prix lap loop itself, not every nearby road — a
+      // circuit sits amid a normal street grid, and highlighting all of it
+      // buries which way the actual lap goes (see raceMode.trackPoints,
+      // built in main.js by snapping a procedural loop onto real roads).
+      const pts = raceMode.trackPoints;
+      ctx.strokeStyle = "rgba(255, 224, 130, 0.9)";
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.moveTo(a.mx, a.my);
-      ctx.lineTo(b.mx, b.my);
+      for (let i = 0; i <= pts.length; i++) {
+        const p = toMini(pts[i % pts.length].x, pts[i % pts.length].y);
+        if (i === 0) ctx.moveTo(p.mx, p.my); else ctx.lineTo(p.mx, p.my);
+      }
       ctx.stroke();
+    } else {
+      ctx.strokeStyle = "rgba(255, 224, 130, 0.6)";
+      ctx.lineWidth = 3;
+      for (const s of roadData.nearbySegments(car.x, car.y)) {
+        const a = toMini(s.x1, s.y1), b = toMini(s.x2, s.y2);
+        ctx.beginPath();
+        ctx.moveTo(a.mx, a.my);
+        ctx.lineTo(b.mx, b.my);
+        ctx.stroke();
+      }
     }
 
     for (const bot of bots) {

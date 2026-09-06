@@ -162,19 +162,33 @@ export class RoadData {
   distanceToNearestRoad(x, y) {
     let best = Infinity;
     for (const s of this.nearbySegments(x, y)) {
-      const d = distToSegment(x, y, s.x1, s.y1, s.x2, s.y2);
+      const d = closestPointOnSegment(x, y, s.x1, s.y1, s.x2, s.y2).dist;
       if (d < best) best = d;
+    }
+    return best;
+  }
+
+  // The actual nearest point ON a nearby road (not just the distance to it) —
+  // used by Grand Prix mode to snap a procedural lap-loop waypoint onto a
+  // real road so the minimap's track guide follows streets that exist,
+  // rather than a straight line through whatever's in the way (see
+  // grandprix.js/main.js). Null if nothing is loaded nearby yet.
+  nearestPointOnRoad(x, y) {
+    let best = null, bestDist = Infinity;
+    for (const s of this.nearbySegments(x, y)) {
+      const p = closestPointOnSegment(x, y, s.x1, s.y1, s.x2, s.y2);
+      if (p.dist < bestDist) { bestDist = p.dist; best = { x: p.x, y: p.y, dist: p.dist }; }
     }
     return best;
   }
 }
 
-function distToSegment(px, py, x1, y1, x2, y2) {
+function closestPointOnSegment(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1, dy = y2 - y1;
   const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  if (lenSq === 0) return { x: x1, y: y1, dist: Math.hypot(px - x1, py - y1) };
   let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
   t = Math.max(0, Math.min(1, t));
   const cx = x1 + t * dx, cy = y1 + t * dy;
-  return Math.hypot(px - cx, py - cy);
+  return { x: cx, y: cy, dist: Math.hypot(px - cx, py - cy) };
 }
