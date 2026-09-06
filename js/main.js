@@ -65,28 +65,6 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
   );
 }
 
-// Snaps each raw (geometric-circle) waypoint onto the nearest real road once
-// its tile has loaded, so the minimap's Grand Prix track guide (see
-// drive.js) hugs actual streets instead of a straight line through whatever
-// happens to be in the way. Loading is fire-and-forget (roads.js), so this
-// polls, re-nudging any tile that hasn't arrived yet, until every waypoint
-// has *something* nearby or the timeout is hit — whichever waypoints never
-// get a nearby road just keep their raw circle position as a fallback.
-async function buildGpTrackPoints(roadData, circuit, timeoutMs = 6000) {
-  const raw = buildTrackWaypoints(circuit);
-  const deadline = Date.now() + timeoutMs;
-  let pending = raw;
-  while (pending.length > 0 && Date.now() < deadline) {
-    for (const p of pending) roadData.ensureLoaded(p.x, p.y);
-    await new Promise((r) => setTimeout(r, 200));
-    pending = pending.filter((p) => roadData.nearbySegments(p.x, p.y).length === 0);
-  }
-  return raw.map((p) => {
-    const snapped = roadData.nearestPointOnRoad(p.x, p.y);
-    return snapped && snapped.dist < 120 ? { x: snapped.x, y: snapped.y } : p;
-  });
-}
-
 async function onConfirmGrandPrix(circuit, laps) {
   const snapped = await snapToNearestRoad(circuit.lat, circuit.lng);
   if (!snapped) {
@@ -95,7 +73,16 @@ async function onConfirmGrandPrix(circuit, laps) {
 
   const roadData = new RoadData(snapped.lat, snapped.lng);
   const car = createCar(0, 0, circuit.heading * Math.PI / 180);
-  const trackPoints = await buildGpTrackPoints(roadData, circuit);
+  const trackPoints = buildTrackWaypoints(circuit);
+  // Kick off loading for every waypoint's tile now rather than waiting for
+  // the player to physically drive there — fire-and-forget (roads.js), same
+  // as the car's own position. Real Overpass tile fetches are deliberately
+  // throttled app-wide (see geo.js) to avoid getting rate-limited, so a full
+  // lap loop's worth of tiles can take many seconds to arrive; rather than
+  // block race start on that, drive.js's minimap re-snaps these waypoints
+  // onto real roads live, frame by frame, as tiles land — the guide starts
+  // as a plain geometric loop and sharpens onto real streets over the race.
+  for (const p of trackPoints) roadData.ensureLoaded(p.x, p.y);
 
   showDrive();
   startDrive(

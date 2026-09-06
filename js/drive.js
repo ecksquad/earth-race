@@ -900,14 +900,23 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     if (isGp) {
       // Only the Grand Prix lap loop itself, not every nearby road — a
       // circuit sits amid a normal street grid, and highlighting all of it
-      // buries which way the actual lap goes (see raceMode.trackPoints,
-      // built in main.js by snapping a procedural loop onto real roads).
-      const pts = raceMode.trackPoints;
+      // buries which way the actual lap goes. raceMode.trackPoints is a
+      // plain geometric loop (see grandprix.js) that hasn't necessarily
+      // loaded real road data yet — real Overpass tile fetches are
+      // deliberately throttled app-wide (geo.js) and a whole lap's worth can
+      // take many seconds, so rather than block race start on that, each
+      // point is snapped onto whatever real road is nearest RIGHT NOW, live,
+      // every frame — the guide starts as a plain loop and sharpens onto
+      // real streets as tiles land over the race.
       ctx.strokeStyle = "rgba(255, 224, 130, 0.9)";
       ctx.lineWidth = 4;
       ctx.beginPath();
+      const pts = raceMode.trackPoints;
       for (let i = 0; i <= pts.length; i++) {
-        const p = toMini(pts[i % pts.length].x, pts[i % pts.length].y);
+        const raw = pts[i % pts.length];
+        const snapped = roadData.nearestPointOnRoad(raw.x, raw.y);
+        const wp = snapped && snapped.dist < 120 ? snapped : raw;
+        const p = toMini(wp.x, wp.y);
         if (i === 0) ctx.moveTo(p.mx, p.my); else ctx.lineTo(p.mx, p.my);
       }
       ctx.stroke();
@@ -1070,6 +1079,12 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       }
 
       roadData.ensureLoaded(car.x, car.y);
+      // Keep nudging the Grand Prix track loop's tiles too, not just the
+      // car's own position — ensureLoaded no-ops once a tile is loaded or
+      // already pending, so this is cheap, but it's what lets a tile that
+      // failed once (an Overpass mirror hiccup) actually get retried instead
+      // of staying blank for the rest of the race (see roads.js).
+      if (isGp) for (const p of raceMode.trackPoints) roadData.ensureLoaded(p.x, p.y);
       const distToRoad = roadData.distanceToNearestRoad(car.x, car.y);
       offRoad = distToRoad > ROAD_HALF_WIDTH_M + OFFROAD_MARGIN_M;
 
