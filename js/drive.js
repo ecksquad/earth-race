@@ -30,6 +30,9 @@ const GHOST_SAMPLE_INTERVAL_S = 0.15; // how often to record a path point for th
 const TOAST_DURATION_MS = 2600;
 const SKID_MARK_LIFETIME_MS = 2500;
 const SKID_MARK_INTERVAL_M = 1.2; // minimum travel distance between recorded skid points
+const WAKE_LIFETIME_MS = 1500;
+const WAKE_INTERVAL_M = 2; // minimum travel distance between recorded wake points
+const WAKE_MIN_SPEED_MS = 6; // ~22 km/h — below this a boat's wake isn't worth drawing
 
 // Skin unlocks (see achievements.js) are a CSS filter applied to the same
 // sprite, not new art — cheap "cosmetic reward" that's still visually distinct.
@@ -73,8 +76,10 @@ function loadSprite(path, onReady) {
 
 let carSprite = null;
 let bikeSprite = null;
+let boatSprite = null;
 loadSprite("assets/car-top.png", (sprite) => { carSprite = sprite; });
 loadSprite("assets/bike-top.png", (sprite) => { bikeSprite = sprite; });
+loadSprite("assets/boat-top.png", (sprite) => { boatSprite = sprite; }); // nose faces right, same as car-top.png — reuses CAR_SPRITE_BASE_ROTATION
 
 // Which sprite + rotation twist to use for a given vehicle class — only the
 // player's own car currently varies (bots/ghosts/other players always render
@@ -348,6 +353,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // drifting, faded out over SKID_MARK_LIFETIME_MS — purely cosmetic.
   let skidMarks = []; // { x, y, at }[]
   let lastSkidX = null, lastSkidY = null;
+  let lastWakeX = null, lastWakeY = null;
   const remoteTrails = new Map(); // playerId -> [{x,y}] breadcrumb for other real players
 
   function newAchievementToast(ids) {
@@ -370,11 +376,12 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // Best-route overlay (see main.js's fetchRoute) — a real road route, not
   // just a straight line, shown in green. `ferrySegments` are the sub-ranges
   // of that route OSRM's driving profile crossed by boat (there's obviously
-  // no road across open water) — while the car is near one of those, it's
-  // treated as "on road" (no off-road penalty) and rendered as a boat
-  // instead of the player's vehicle (see inWaterCrossing below).
-  const FERRY_CORRIDOR_RADIUS_M = 60;
+  // no road across open water) — getting near one commits you to boat mode
+  // (see inWaterCrossing below): no off-road penalty, full speed, free to
+  // roam the whole crossing rather than a corridor the width of the line.
+  const FERRY_CORRIDOR_RADIUS_M = 120;
   let inWaterCrossing = false;
+  let wakeMarks = []; // { x, y, at }[] — boat wake, purely cosmetic
   // Non-GP races always attempt a route lookup (main.js), so routePoints
   // being missing here means that lookup genuinely failed (demo server
   // hiccup/rate limit, or no route exists) — surfaced once so "no green
@@ -796,6 +803,19 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.fill();
     }
 
+    // Boat wake: same fading-trail mechanic as skid marks, foam-white and
+    // widening slightly as it ages instead of a flat dot.
+    for (const mark of wakeMarks) {
+      const age = performance.now() - mark.at;
+      if (age > WAKE_LIFETIME_MS) continue;
+      const p = toScreen(mark.x, mark.y);
+      const t = age / WAKE_LIFETIME_MS;
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(230,240,240,${0.5 * (1 - t)})`;
+      ctx.arc(p.sx, p.sy, 1.6 + t * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // Ghosts (see activeGhosts()) — racing your own best AND an imported
     // friend's simultaneously is supported; each gets a distinct tint.
     if (showGhost && raceStartTime !== null) {
@@ -830,7 +850,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       }
     }
 
-    for (const bot of bots) {
+    // No ambient traffic out on the water (see the tick()-side note by
+    // inWaterCrossing) — a bot with nowhere real to go just parks at its
+    // last point, which reads as a car abandoned at sea if drawn.
+    if (!inWaterCrossing) for (const bot of bots) {
       const botPos = botWorldPos(bot);
       const p = toScreen(botPos.x, botPos.y);
       if (p.sx < -50 || p.sx > w + 50 || p.sy < -50 || p.sy > h + 50) continue;
@@ -921,7 +944,14 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.save();
       ctx.translate(carPt.sx, carPt.sy);
       const { sprite: playerSprite, baseRotation: playerBaseRotation } = spriteFor(vehicleClass);
-      if (inWaterCrossing) {
+      if (inWaterCrossing && boatSprite) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.rotate(car.heading + CAR_SPRITE_BASE_ROTATION); // boat-top.png's bow faces right, same as car-top.png
+        const lenPx = CAR_LENGTH_M * PX_PER_METER * 1.6;
+        const widPx = lenPx * (boatSprite.height / boatSprite.width);
+        ctx.drawImage(boatSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
+      } else if (inWaterCrossing) {
         ctx.rotate(car.heading);
         drawBoatShape(ctx, CAR_LENGTH_M * PX_PER_METER * 1.4);
       } else if (playerSprite) {
@@ -954,18 +984,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     const cx = MINIMAP_MARGIN + MINIMAP_RADIUS_PX;
     const cy = h - MINIMAP_MARGIN - MINIMAP_RADIUS_PX;
     const scale = MINIMAP_RADIUS_PX / MINIMAP_METERS;
-    // Heading-up, not north-up: the car always points straight up, so the
-    // whole map (and everything drawn on it) is rotated by -car.heading
-    // instead. Decompose each point's offset from the car into "right of
-    // facing direction" / "ahead of facing direction" components — those
-    // map directly onto screen x/y regardless of which way north actually is.
-    const cosH = Math.cos(car.heading), sinH = Math.sin(car.heading);
-    const toMini = (x, y) => {
-      const dx = x - car.x, dy = y - car.y;
-      const right = dx * cosH - dy * sinH;
-      const ahead = dx * sinH + dy * cosH;
-      return { mx: cx + right * scale, my: cy - ahead * scale };
-    };
+    const toMini = (x, y) => ({
+      mx: cx + (x - car.x) * scale,
+      my: cy - (y - car.y) * scale, // north-up, same as the main view
+    });
 
     ctx.save();
     ctx.beginPath();
@@ -1031,7 +1053,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       }
     }
 
-    for (const bot of bots) {
+    if (!inWaterCrossing) for (const bot of bots) {
       const botPos = botWorldPos(bot);
       if (Math.hypot(botPos.x - car.x, botPos.y - car.y) > MINIMAP_METERS) continue;
       const p = toMini(botPos.x, botPos.y);
@@ -1054,10 +1076,8 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
     // Destination blip: when the finish is off the minimap, show an arrow
     // clamped to the rim pointing in its direction (GTA-style radar beacon).
-    // Subtracting car.heading converts the world-space bearing to screen
-    // angle now that the map itself is rotated heading-up, not north-up.
     if (distToEnd > MINIMAP_METERS) {
-      const angle = Math.atan2(dx, dy) - car.heading;
+      const angle = Math.atan2(dx, dy);
       const rim = MINIMAP_RADIUS_PX - 10;
       const bx = cx + Math.sin(angle) * rim;
       const by = cy - Math.cos(angle) * rim;
@@ -1074,10 +1094,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.restore();
     }
 
-    // Player marker — always pointing straight up now that the map rotates
-    // around the car instead of the car rotating on the map.
+    // Player marker + rim.
     ctx.save();
     ctx.translate(cx, cy);
+    ctx.rotate(car.heading);
     ctx.fillStyle = "#33e0c2";
     ctx.beginPath();
     ctx.moveTo(0, -7);
@@ -1092,17 +1112,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     ctx.strokeStyle = "rgba(255,255,255,.25)";
     ctx.lineWidth = 2;
     ctx.stroke();
-
-    // "N" no longer sits at a fixed spot at the top — it orbits the rim to
-    // wherever north actually is relative to the way the car's facing, same
-    // math as the destination blip above.
-    const northAngle = -car.heading;
-    const nRim = MINIMAP_RADIUS_PX - 12;
     ctx.fillStyle = "rgba(255,255,255,.6)";
     ctx.font = "10px sans-serif";
     ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("N", cx + Math.sin(northAngle) * nRim, cy - Math.cos(northAngle) * nRim);
+    ctx.fillText("N", cx, cy - MINIMAP_RADIUS_PX + 12);
   }
 
   // Whole-route overview shown while "M" is held — real satellite imagery
@@ -1209,9 +1222,18 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       // of staying blank for the rest of the race (see roads.js).
       if (isGp) for (const p of raceMode.trackPoints) roadData.ensureLoaded(p.x, p.y);
 
-      inWaterCrossing = ferrySegments.some(seg => distToPolyline(car.x, car.y, seg) < FERRY_CORRIDOR_RADIUS_M);
       const distToRoad = roadData.distanceToNearestRoad(car.x, car.y);
-      offRoad = !inWaterCrossing && distToRoad > ROAD_HALF_WIDTH_M + OFFROAD_MARGIN_M;
+      const onRealRoad = distToRoad <= ROAD_HALF_WIDTH_M + OFFROAD_MARGIN_M;
+      // Entering a crossing only needs to be near the ferry line, but a real
+      // crossing obviously isn't confined to a narrow corridor the width of
+      // the line itself — once committed, stay a boat and free to roam
+      // however wide that stretch of water actually is. Leaving happens
+      // naturally on reaching a real road again (the far shore), not by
+      // straying outside some fixed radius.
+      inWaterCrossing = inWaterCrossing
+        ? !onRealRoad
+        : ferrySegments.some(seg => distToPolyline(car.x, car.y, seg) < FERRY_CORRIDOR_RADIUS_M);
+      offRoad = !inWaterCrossing && !onRealRoad;
 
       const prevX = car.x, prevY = car.y;
       stepCar(car, input, 1 / 60, !offRoad, vehicleClass);
@@ -1238,10 +1260,25 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
         lastSkidX = null;
       }
 
-      const anyHonk = stepBots(bots, roadData, 1 / 60, { x: car.x, y: car.y }, car.speed);
+      if (inWaterCrossing && Math.abs(car.speed) >= WAKE_MIN_SPEED_MS) {
+        if (lastWakeX === null || Math.hypot(car.x - lastWakeX, car.y - lastWakeY) >= WAKE_INTERVAL_M) {
+          wakeMarks.push({ x: car.x, y: car.y, at: performance.now() });
+          lastWakeX = car.x; lastWakeY = car.y;
+          if (wakeMarks.length > 200) wakeMarks.splice(0, wakeMarks.length - 200);
+        }
+      } else {
+        lastWakeX = null;
+      }
+
+      // No ambient traffic out on the water — bots only ever exist on real
+      // road segments (bots.js), so one caught near a ferry crossing is just
+      // a parked-at-the-last-known-point leftover with nowhere real to go;
+      // hide and ignore it entirely while the player is a boat rather than
+      // let it read as a car stranded at sea.
+      const anyHonk = inWaterCrossing ? false : stepBots(bots, roadData, 1 / 60, { x: car.x, y: car.y }, car.speed);
       if (anyHonk) audio.playHorn();
 
-      if (raceStartTime !== null) {
+      if (raceStartTime !== null && !inWaterCrossing) {
         let anyCollision = false, anyFatal = false;
         for (const bot of bots) {
           const botPos = botWorldPos(bot);
