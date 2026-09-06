@@ -954,10 +954,18 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     const cx = MINIMAP_MARGIN + MINIMAP_RADIUS_PX;
     const cy = h - MINIMAP_MARGIN - MINIMAP_RADIUS_PX;
     const scale = MINIMAP_RADIUS_PX / MINIMAP_METERS;
-    const toMini = (x, y) => ({
-      mx: cx + (x - car.x) * scale,
-      my: cy - (y - car.y) * scale, // north-up, same as the main view
-    });
+    // Heading-up, not north-up: the car always points straight up, so the
+    // whole map (and everything drawn on it) is rotated by -car.heading
+    // instead. Decompose each point's offset from the car into "right of
+    // facing direction" / "ahead of facing direction" components — those
+    // map directly onto screen x/y regardless of which way north actually is.
+    const cosH = Math.cos(car.heading), sinH = Math.sin(car.heading);
+    const toMini = (x, y) => {
+      const dx = x - car.x, dy = y - car.y;
+      const right = dx * cosH - dy * sinH;
+      const ahead = dx * sinH + dy * cosH;
+      return { mx: cx + right * scale, my: cy - ahead * scale };
+    };
 
     ctx.save();
     ctx.beginPath();
@@ -1046,8 +1054,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
     // Destination blip: when the finish is off the minimap, show an arrow
     // clamped to the rim pointing in its direction (GTA-style radar beacon).
+    // Subtracting car.heading converts the world-space bearing to screen
+    // angle now that the map itself is rotated heading-up, not north-up.
     if (distToEnd > MINIMAP_METERS) {
-      const angle = Math.atan2(dx, dy);
+      const angle = Math.atan2(dx, dy) - car.heading;
       const rim = MINIMAP_RADIUS_PX - 10;
       const bx = cx + Math.sin(angle) * rim;
       const by = cy - Math.cos(angle) * rim;
@@ -1064,10 +1074,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.restore();
     }
 
-    // Player marker + rim.
+    // Player marker — always pointing straight up now that the map rotates
+    // around the car instead of the car rotating on the map.
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(car.heading);
     ctx.fillStyle = "#33e0c2";
     ctx.beginPath();
     ctx.moveTo(0, -7);
@@ -1082,10 +1092,17 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     ctx.strokeStyle = "rgba(255,255,255,.25)";
     ctx.lineWidth = 2;
     ctx.stroke();
+
+    // "N" no longer sits at a fixed spot at the top — it orbits the rim to
+    // wherever north actually is relative to the way the car's facing, same
+    // math as the destination blip above.
+    const northAngle = -car.heading;
+    const nRim = MINIMAP_RADIUS_PX - 12;
     ctx.fillStyle = "rgba(255,255,255,.6)";
     ctx.font = "10px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("N", cx, cy - MINIMAP_RADIUS_PX + 12);
+    ctx.textBaseline = "middle";
+    ctx.fillText("N", cx + Math.sin(northAngle) * nRim, cy - Math.cos(northAngle) * nRim);
   }
 
   // Whole-route overview shown while "M" is held — real satellite imagery
