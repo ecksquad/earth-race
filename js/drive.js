@@ -311,6 +311,14 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // fractional-lap score (completed laps + progress into the current one)
   // compared against every bot's own totalDistanceM/lapMeters — see tick().
   const GP_ARM_DIST_M = 150;
+  // Snapping all 24 track-loop points onto the nearest real road is real
+  // work (each one scans every loaded segment) — doing it fresh every frame
+  // for a display that only needs to look "live" as tiles arrive is wasted
+  // CPU. Refreshed on GP_SNAP_REFRESH_MS instead; the drawn line is read
+  // from this cache every frame regardless.
+  const GP_SNAP_REFRESH_MS = 300;
+  let gpTrackSnapCache = null;
+  let gpTrackSnapAt = 0;
   const gp = isGp ? {
     circuit: raceMode.circuit,
     totalLaps: raceMode.laps,
@@ -1012,31 +1020,48 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       // loaded real road data yet — real Overpass tile fetches are
       // deliberately throttled app-wide (geo.js) and a whole lap's worth can
       // take many seconds, so rather than block race start on that, each
-      // point is snapped onto whatever real road is nearest RIGHT NOW, live,
-      // every frame — the guide starts as a plain loop and sharpens onto
-      // real streets as tiles land over the race.
+      // point is snapped onto whatever real road is nearest, refreshed every
+      // GP_SNAP_REFRESH_MS (not every frame — see the cache above) — the
+      // guide starts as a plain loop and sharpens onto real streets as tiles
+      // land over the race.
+      const now = performance.now();
+      if (!gpTrackSnapCache || now - gpTrackSnapAt > GP_SNAP_REFRESH_MS) {
+        gpTrackSnapCache = raceMode.trackPoints.map((raw) => {
+          const snapped = roadData.nearestPointOnRoad(raw.x, raw.y);
+          return snapped && snapped.dist < 120 ? snapped : raw;
+        });
+        gpTrackSnapAt = now;
+      }
       ctx.strokeStyle = "rgba(255, 224, 130, 0.9)";
       ctx.lineWidth = 4;
       ctx.beginPath();
-      const pts = raceMode.trackPoints;
-      for (let i = 0; i <= pts.length; i++) {
-        const raw = pts[i % pts.length];
-        const snapped = roadData.nearestPointOnRoad(raw.x, raw.y);
-        const wp = snapped && snapped.dist < 120 ? snapped : raw;
+      for (let i = 0; i <= gpTrackSnapCache.length; i++) {
+        const wp = gpTrackSnapCache[i % gpTrackSnapCache.length];
         const p = toMini(wp.x, wp.y);
         if (i === 0) ctx.moveTo(p.mx, p.my); else ctx.lineTo(p.mx, p.my);
       }
       ctx.stroke();
     } else {
+      // nearbySegments returns everything in the whole loaded 3x3 tile block
+      // (up to ~6.6km across) — the minimap only ever shows MINIMAP_METERS
+      // around the car, so anything farther is pure waste to draw. Batched
+      // into one path + one stroke() instead of a stroke() per segment,
+      // which was the single biggest per-frame cost here in anything denser
+      // than open countryside (a real city grid is easily hundreds of
+      // segments per 3x3 tile block).
       ctx.strokeStyle = "rgba(255, 224, 130, 0.6)";
       ctx.lineWidth = 3;
+      ctx.beginPath();
+      const cullM = MINIMAP_METERS + 50;
       for (const s of roadData.nearbySegments(car.x, car.y)) {
+        const d1 = Math.hypot(s.x1 - car.x, s.y1 - car.y);
+        const d2 = Math.hypot(s.x2 - car.x, s.y2 - car.y);
+        if (d1 > cullM && d2 > cullM) continue;
         const a = toMini(s.x1, s.y1), b = toMini(s.x2, s.y2);
-        ctx.beginPath();
         ctx.moveTo(a.mx, a.my);
         ctx.lineTo(b.mx, b.my);
-        ctx.stroke();
       }
+      ctx.stroke();
 
       // The actual best real-road route (see main.js's fetchRoute), on top
       // of the plain nearby-roads overlay above so it stands out as "this
