@@ -74,6 +74,31 @@ function loadSprite(path, onReady) {
   });
 }
 
+// ctx.filter (hue-rotate/saturate/etc, used to tint bots blue, other players
+// magenta, ghosts grayscale...) is a real per-pixel reprocessing pass, not a
+// cheap GPU blit — re-running it on every filtered sprite, every frame (once
+// each for up to ~14 bots plus ghosts plus other players plus the player's
+// own skin) was a genuine cost. Each (sprite, filter) combination only ever
+// needs computing once, then it's just a plain fast drawImage from then on.
+const tintCache = new Map();
+function getTinted(sprite, filter) {
+  if (!filter || filter === "none") return sprite;
+  let bySprite = tintCache.get(sprite);
+  if (!bySprite) { bySprite = new Map(); tintCache.set(sprite, bySprite); }
+  let tinted = bySprite.get(filter);
+  if (!tinted) {
+    const off = document.createElement("canvas");
+    off.width = sprite.width;
+    off.height = sprite.height;
+    const octx = off.getContext("2d");
+    octx.filter = filter;
+    octx.drawImage(sprite, 0, 0);
+    tinted = off;
+    bySprite.set(filter, tinted);
+  }
+  return tinted;
+}
+
 let carSprite = null;
 let bikeSprite = null;
 let boatSprite = null;
@@ -838,12 +863,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
         if (carSprite) {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = "high";
-          ctx.filter = g === importedGhost ? "hue-rotate(190deg) saturate(1.5) brightness(1.3)" : "grayscale(1) brightness(1.6)";
+          const tinted = getTinted(carSprite, g === importedGhost ? "hue-rotate(190deg) saturate(1.5) brightness(1.3)" : "grayscale(1) brightness(1.6)");
           ctx.rotate(ghostPos.heading + CAR_SPRITE_BASE_ROTATION);
           const lenPx = CAR_LENGTH_M * PX_PER_METER;
           const widPx = lenPx * (carSprite.height / carSprite.width);
-          ctx.drawImage(carSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
-          ctx.filter = "none";
+          ctx.drawImage(tinted, -lenPx / 2, -widPx / 2, lenPx, widPx);
         } else {
           ctx.rotate(ghostPos.heading);
           ctx.fillStyle = g === importedGhost ? "#4a90d9" : "#eef3f7";
@@ -870,12 +894,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       if (carSprite) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        ctx.filter = "hue-rotate(200deg) saturate(1.3)"; // distinguish traffic bots (blue tint) from the player's red car
+        const tinted = getTinted(carSprite, "hue-rotate(200deg) saturate(1.3)"); // distinguish traffic bots (blue tint) from the player's red car
         ctx.rotate(bot.heading + CAR_SPRITE_BASE_ROTATION);
         const lenPx = CAR_LENGTH_M * PX_PER_METER;
         const widPx = lenPx * (carSprite.height / carSprite.width);
-        ctx.drawImage(carSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
-        ctx.filter = "none";
+        ctx.drawImage(tinted, -lenPx / 2, -widPx / 2, lenPx, widPx);
       } else {
         ctx.rotate(bot.heading);
         ctx.fillStyle = "#4a90d9";
@@ -920,12 +943,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       if (carSprite) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        ctx.filter = "hue-rotate(280deg) saturate(1.4)"; // distinguish real players (magenta) from ambient bots (blue)
+        const tinted = getTinted(carSprite, "hue-rotate(280deg) saturate(1.4)"); // distinguish real players (magenta) from ambient bots (blue)
         ctx.rotate(other.heading + CAR_SPRITE_BASE_ROTATION);
         const lenPx = CAR_LENGTH_M * PX_PER_METER;
         const widPx = lenPx * (carSprite.height / carSprite.width);
-        ctx.drawImage(carSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
-        ctx.filter = "none";
+        ctx.drawImage(tinted, -lenPx / 2, -widPx / 2, lenPx, widPx);
       } else {
         ctx.rotate(other.heading);
         ctx.fillStyle = "#e040fb";
@@ -965,12 +987,11 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       } else if (playerSprite) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        ctx.filter = SKIN_FILTERS[garage.skin] || "none";
+        const tinted = getTinted(playerSprite, SKIN_FILTERS[garage.skin] || "none");
         ctx.rotate(car.heading + playerBaseRotation);
         const lenPx = CAR_LENGTH_M * PX_PER_METER * VEHICLE_CLASSES[vehicleClass].spriteScale;
         const widPx = lenPx * (playerSprite.height / playerSprite.width);
-        ctx.drawImage(playerSprite, -lenPx / 2, -widPx / 2, lenPx, widPx);
-        ctx.filter = "none";
+        ctx.drawImage(tinted, -lenPx / 2, -widPx / 2, lenPx, widPx);
       } else {
         ctx.rotate(car.heading);
         ctx.fillStyle = offRoad ? "#f0a83f" : "#33e0c2";
@@ -1007,7 +1028,16 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     ctx.fillStyle = "rgba(10,14,19,.82)";
     ctx.fill();
     const toMiniScreen = (x, y) => { const p = toMini(x, y); return { sx: p.mx, sy: p.my }; };
-    baseMap.draw(ctx, toMiniScreen, car.x - MINIMAP_METERS, car.y - MINIMAP_METERS, car.x + MINIMAP_METERS, car.y + MINIMAP_METERS);
+    // The minimap covers a MINIMAP_METERS*2-wide area in a MINIMAP_RADIUS_PX*2
+    // circle — much less detail than DEFAULT_ZOOM (the main view's default,
+    // meant for a close-up few-hundred-meter span) actually needs. Drawing
+    // that wide an area at max zoom meant far more, far smaller satellite
+    // tiles than the minimap's own resolution could ever show — real,
+    // wasted per-frame tile draws. Same formula drawOverview() already uses.
+    const miniMetersPerPixel = (MINIMAP_METERS * 2) / (MINIMAP_RADIUS_PX * 2);
+    const miniZoom = Math.max(2, Math.min(DEFAULT_ZOOM,
+      Math.round(Math.log2(156543.03392 * Math.cos(startLatLng.lat * Math.PI / 180) / miniMetersPerPixel))));
+    baseMap.draw(ctx, toMiniScreen, car.x - MINIMAP_METERS, car.y - MINIMAP_METERS, car.x + MINIMAP_METERS, car.y + MINIMAP_METERS, miniZoom);
     ctx.fillStyle = "rgba(10,14,19,.45)"; // dim the imagery so lines/icons stay legible
     ctx.fill();
 
