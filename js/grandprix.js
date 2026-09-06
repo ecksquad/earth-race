@@ -29,13 +29,23 @@ export const LAP_OPTIONS = [1, 3, 5, 10];
 // follow an actual racing line (see bots.js), this is what gives the
 // minimap's track guide (see drive.js) something road-shaped to hug instead
 // of a straight line through whatever's in the way.
+//
+// The circle passes THROUGH the start point (0,0) — it is not centered on
+// it. Centering it there would put the actual track radiusM (500m-1000m+)
+// away from the car in every direction, nowhere near the start/finish line
+// it's meant to be adjacent to. The center is offset perpendicular to the
+// circuit's heading so the loop is tangent to that heading right at (0,0),
+// matching the direction the car is spawned facing.
 export function buildTrackWaypoints(circuit, count = 24) {
   const radiusM = Math.max(150, (circuit.lapKm * 1000) / (2 * Math.PI));
-  const baseAngle = circuit.heading * Math.PI / 180;
+  const headingRad = circuit.heading * Math.PI / 180;
+  const dirX = Math.sin(headingRad), dirY = Math.cos(headingRad);
+  const centerX = -radiusM * dirY, centerY = radiusM * dirX;
+  const phi0 = Math.atan2(-dirX, dirY);
   const points = [];
   for (let i = 0; i < count; i++) {
-    const angle = baseAngle + (i / count) * Math.PI * 2;
-    points.push({ x: Math.sin(angle) * radiusM, y: Math.cos(angle) * radiusM });
+    const phi = phi0 + (i / count) * Math.PI * 2;
+    points.push({ x: centerX + radiusM * Math.cos(phi), y: centerY + radiusM * Math.sin(phi) });
   }
   return points;
 }
