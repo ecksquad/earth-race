@@ -13,7 +13,7 @@ import {
   getStats, updateStats, addRegionVisited, unlockAchievement, getGarage,
 } from "./storage.js";
 import { BaseMap, DEFAULT_ZOOM } from "./basemap.js";
-import { spawnBots, stepBots, BOT_RADIUS_M, botWorldPos } from "./bots.js";
+import { spawnBots, stepBots, BOT_RADIUS_M, BOT_COUNT, botWorldPos } from "./bots.js";
 import { projectCollectables, RARITY_RGB, COLLECT_RADIUS_M, regionNameForLatLng, getAllCollectables } from "./collectables.js";
 import { encodeGhost, decodeGhost } from "./ghostCode.js";
 import * as audio from "./audio.js";
