@@ -61,14 +61,19 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
   // this time, same "nice to have, not required" spirit as landmark names.
   let routePoints = null;
   let ferrySegments = [];
-  try {
-    const route = await fetchRoute(snappedStart.lat, snappedStart.lng, end.lat, end.lng);
-    if (route) {
-      routePoints = simplifyRoute(route.points).map(p => roadData.project(p.lat, p.lng));
-      ferrySegments = route.ferrySegments.map(seg => seg.map(p => roadData.project(p.lat, p.lng)));
+  for (let attempt = 0; attempt < 2 && !routePoints; attempt++) {
+    try {
+      const route = await fetchRoute(snappedStart.lat, snappedStart.lng, end.lat, end.lng);
+      if (route) {
+        routePoints = simplifyRoute(route.points).map(p => roadData.project(p.lat, p.lng));
+        ferrySegments = route.ferrySegments.map(seg => seg.map(p => roadData.project(p.lat, p.lng)));
+        console.log(`Route overlay: ${route.points.length} points, ${ferrySegments.length} ferry segment(s)`);
+      } else {
+        console.warn("Route lookup returned no route (OSRM code !== Ok) — no overlay this race");
+      }
+    } catch (err) {
+      console.warn(`Route lookup attempt ${attempt + 1} failed`, err);
     }
-  } catch (err) {
-    console.warn("Route lookup failed, continuing without the route overlay", err);
   }
 
   showDrive();

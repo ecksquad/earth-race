@@ -375,6 +375,13 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
   // instead of the player's vehicle (see inWaterCrossing below).
   const FERRY_CORRIDOR_RADIUS_M = 60;
   let inWaterCrossing = false;
+  // Non-GP races always attempt a route lookup (main.js), so routePoints
+  // being missing here means that lookup genuinely failed (demo server
+  // hiccup/rate limit, or no route exists) — surfaced once so "no green
+  // line" reads as a known miss instead of silently nothing.
+  if (!isGp && !routePoints) {
+    queueCollectToast({ icon: "🗺️", name: "No route overlay this time", rarity: "route lookup failed" });
+  }
 
   let raceStartTime = null;
   let finished = false;
