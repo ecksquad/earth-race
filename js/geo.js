@@ -237,11 +237,21 @@ export async function geocodePlace(query) {
 
 // OSRM's free public routing demo — the actual best real-road route between
 // two points (not just a straight line), used to draw the green route
-// overlay (see drive.js) instead of the plain start->end dashed line. `mode`
-// on a step is "ferry" wherever the driving profile crosses open water via a
-// real car ferry — those coordinate ranges become the "boat" corridors (see
-// drive.js/main.js) since there's obviously no road there.
+// overlay (see drive.js) instead of the plain start->end dashed line.
+//
+// `mode` on a step is "ferry" both for a real open-water car ferry AND for
+// a car-shuttle train through a tunnel (the Channel Tunnel's "Le Shuttle" is
+// tagged this way too — confirmed by checking a real Dover-Calais route,
+// which came back as "Le Shuttle" at an implied ~100 km/h, obviously a train
+// through a tunnel, not a boat). There's no `mode` value that tells the two
+// apart directly, but their speed does: a real car ferry's distance/duration
+// works out to a boat's walking-pace-ish speed (a real Scottish car ferry
+// checked the same way came back at 6-11 km/h), while a shuttle train is
+// highway-fast. FERRY_MAX_SPEED_MS draws that line — only slow "ferry" steps
+// become the in-game boat corridors (see drive.js/main.js); a fast one is
+// left as an ordinary (if impassable in reality) stretch of the route.
 const OSRM_URL = "https://router.project-osrm.org/route/v1/driving";
+const FERRY_MAX_SPEED_MS = 8; // ~29 km/h — above this it's a train shuttle, not a boat
 
 export async function fetchRoute(startLat, startLng, endLat, endLng) {
   const url = `${OSRM_URL}/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson&steps=true`;
@@ -255,7 +265,8 @@ export async function fetchRoute(startLat, startLng, endLat, endLng) {
   const ferrySegments = [];
   for (const leg of route.legs || []) {
     for (const step of leg.steps || []) {
-      if (step.mode === "ferry" && step.geometry?.coordinates?.length > 1) {
+      const impliedSpeed = step.duration > 0 ? step.distance / step.duration : Infinity;
+      if (step.mode === "ferry" && impliedSpeed <= FERRY_MAX_SPEED_MS && step.geometry?.coordinates?.length > 1) {
         ferrySegments.push(step.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })));
       }
     }
