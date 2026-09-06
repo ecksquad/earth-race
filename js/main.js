@@ -2,7 +2,7 @@
 // drive renderer.
 
 import { initPicker } from "./picker.js";
-import { generateEndpoint, snapToNearestRoad, haversineDistanceKm } from "./geo.js";
+import { generateEndpoint, snapToNearestRoad, haversineDistanceKm, fetchRoute, simplifyRoute } from "./geo.js";
 import { RoadData } from "./roads.js";
 import { createCar } from "./car.js";
 import { startDrive } from "./drive.js";
@@ -27,7 +27,7 @@ function showDrive() {
   driveScreen.classList.add("active");
 }
 
-async function onConfirmStart(startLat, startLng, distanceKm, manualEnd, waypoints = []) {
+async function onConfirmStart(startLat, startLng, distanceKm, manualEnd) {
   // Snap the start point onto a real road too — otherwise a click that lands
   // just off a road (a park, a block interior, open field) spawns the car
   // somewhere with no nearby road tiles to load, and the drive screen has
@@ -53,18 +53,22 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd, waypoin
   const car = createCar(0, 0, 0);
   const endLocal = roadData.project(end.lat, end.lng);
 
-  // Each typed waypoint (see picker.js's Plan Route panel) gets snapped onto
-  // a real road too, same as the start/end — one that fails to snap (e.g. a
-  // landmark search result that landed in open water) is just skipped rather
-  // than failing the whole race, since waypoints are a guide, not a
-  // requirement.
-  const waypointsLocal = [];
-  for (const wp of waypoints) {
-    const snappedWp = await snapToNearestRoad(wp.lat, wp.lng);
-    if (snappedWp) {
-      const local = roadData.project(snappedWp.lat, snappedWp.lng);
-      waypointsLocal.push({ x: local.x, y: local.y, name: wp.name });
+  // The actual best real-road route (OSRM's free public demo router), shown
+  // as a green overlay on the drive screen (see drive.js) instead of just a
+  // straight line to the destination. A route lookup failure (the demo
+  // server is occasionally slow/unreachable, or genuinely no route exists)
+  // never blocks the race from starting — it just means no overlay/ferry
+  // this time, same "nice to have, not required" spirit as landmark names.
+  let routePoints = null;
+  let ferrySegments = [];
+  try {
+    const route = await fetchRoute(snappedStart.lat, snappedStart.lng, end.lat, end.lng);
+    if (route) {
+      routePoints = simplifyRoute(route.points).map(p => roadData.project(p.lat, p.lng));
+      ferrySegments = route.ferrySegments.map(seg => seg.map(p => roadData.project(p.lat, p.lng)));
     }
+  } catch (err) {
+    console.warn("Route lookup failed, continuing without the route overlay", err);
   }
 
   showDrive();
@@ -74,7 +78,7 @@ async function onConfirmStart(startLat, startLng, distanceKm, manualEnd, waypoin
       endLatLng: end,
       startLatLng: { lat: snappedStart.lat, lng: snappedStart.lng },
       distanceKm: actualDistanceKm,
-      waypoints: waypointsLocal,
+      routePoints, ferrySegments,
     },
     { onBack: showPicker }
   );

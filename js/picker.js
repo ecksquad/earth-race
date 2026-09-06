@@ -39,8 +39,6 @@ export function initPicker(onConfirm, onConfirmGp) {
   let start = null;
   let end = null;
   let distanceKm = null;
-  let waypoints = []; // {lat, lng, name}[], in order — see the Plan Route panel below
-  const waypointMarkers = [];
 
   const statusEl = document.getElementById("picker-status");
   const hintEl = document.querySelector("#picker-panel .hint");
@@ -62,9 +60,6 @@ export function initPicker(onConfirm, onConfirmGp) {
   const startPlaceBtn = document.getElementById("start-place-btn");
   const endPlaceInput = document.getElementById("end-place-input");
   const endPlaceBtn = document.getElementById("end-place-btn");
-  const waypointInput = document.getElementById("waypoint-input");
-  const waypointAddBtn = document.getElementById("waypoint-add-btn");
-  const waypointsListEl = document.getElementById("waypoints-list");
 
   function updateUI() {
     goBtn.disabled = !(start && (end || distanceKm > 0));
@@ -79,20 +74,12 @@ export function initPicker(onConfirm, onConfirmGp) {
     end = null;
   }
 
-  function clearWaypoints() {
-    waypoints = [];
-    waypointMarkers.forEach(m => m.remove());
-    waypointMarkers.length = 0;
-    renderWaypoints();
-  }
-
   // Shared by a map click and the Plan Route panel's "Find" button — a fresh
-  // start point clears everything downstream of it (end point, distance,
-  // waypoints), since they were only ever meaningful relative to the old one.
+  // start point clears everything downstream of it (end point, distance),
+  // since it was only ever meaningful relative to the old one.
   function setStart(pt) {
     start = pt;
     clearEnd();
-    clearWaypoints();
     distButtons.forEach(b => b.classList.remove("selected"));
     distanceKm = null;
     customKmEl.value = "";
@@ -106,29 +93,6 @@ export function initPicker(onConfirm, onConfirmGp) {
     endMarker = L.circleMarker(end, { radius: 9, color: "#fff", weight: 2, fillColor: "#ef5350", fillOpacity: 0.9 }).addTo(map);
     distButtons.forEach(b => b.classList.remove("selected"));
     distanceKm = null;
-  }
-
-  function renderWaypoints() {
-    waypointsListEl.innerHTML = "";
-    waypoints.forEach((wp, i) => {
-      const chip = document.createElement("div");
-      chip.className = "route-chip";
-      const label = document.createElement("span");
-      label.textContent = `${i + 1}. ${wp.name}`;
-      chip.appendChild(label);
-      const del = document.createElement("button");
-      del.textContent = "×";
-      del.title = "Remove waypoint";
-      del.addEventListener("click", (e) => {
-        e.stopPropagation();
-        waypoints.splice(i, 1);
-        const [removed] = waypointMarkers.splice(i, 1);
-        if (removed) removed.remove();
-        renderWaypoints();
-      });
-      chip.appendChild(del);
-      waypointsListEl.appendChild(chip);
-    });
   }
 
   // Jumps straight back into a previously saved (start, end) pair instead of
@@ -202,7 +166,7 @@ export function initPicker(onConfirm, onConfirmGp) {
     goBtn.disabled = true;
     statusEl.textContent = manualEnd ? "Finding a road near your end point…" : "Finding an end point on real roads…";
     try {
-      await onConfirm(startLat, startLng, km, manualEnd, waypoints);
+      await onConfirm(startLat, startLng, km, manualEnd);
     } catch (err) {
       console.error(err);
       statusEl.textContent = err.message || "Something went wrong — try a different point/distance.";
@@ -313,12 +277,12 @@ export function initPicker(onConfirm, onConfirmGp) {
   });
 
   // Plan Route: type real place names for the start/end point instead of
-  // clicking the map, plus an ordered list of waypoints — real places
-  // (a bridge, a specific road, a landmark) the drive screen will guide you
-  // toward in order via the minimap before finally aiming at the end point.
-  // Geocoded through Nominatim (geo.js); each typed place also drops a
-  // marker on the map exactly like a click would, so both input methods stay
-  // interchangeable (you can type a start then click to adjust the end, etc).
+  // clicking the map — geocoded through Nominatim (geo.js). Each typed place
+  // also drops a marker on the map exactly like a click would, so both input
+  // methods stay interchangeable (type a start then click to adjust the end,
+  // etc). The actual best route between them (green overlay, ferries and
+  // all) is computed automatically once the race starts — see main.js's
+  // fetchRoute call and drive.js's rendering.
   planToggleBtn.addEventListener("click", () => planPanel.classList.toggle("show"));
 
   async function findPlace(input, btn, onFound) {
@@ -352,16 +316,7 @@ export function initPicker(onConfirm, onConfirmGp) {
     updateUI();
   }));
 
-  waypointAddBtn.addEventListener("click", () => findPlace(waypointInput, waypointAddBtn, (place) => {
-    waypoints.push(place);
-    waypointMarkers.push(
-      L.marker([place.lat, place.lng], { opacity: 0.8 }).bindTooltip(`${waypoints.length}. ${place.name}`).addTo(map)
-    );
-    waypointInput.value = "";
-    renderWaypoints();
-  }));
-
-  for (const [input, btn] of [[startPlaceInput, startPlaceBtn], [endPlaceInput, endPlaceBtn], [waypointInput, waypointAddBtn]]) {
+  for (const [input, btn] of [[startPlaceInput, startPlaceBtn], [endPlaceInput, endPlaceBtn]]) {
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") btn.click(); });
   }
 

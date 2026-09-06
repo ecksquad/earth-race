@@ -100,8 +100,6 @@
   .plan-row button{background:var(--accent);color:var(--accent-ink);border:none;border-radius:20px;
     padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
   .plan-row button:disabled{opacity:.5;cursor:default}
-  #waypoints-list{display:flex;flex-wrap:wrap;gap:8px}
-  #waypoints-list:empty{display:none}
 
   /* --- drive screen --- */
   /* Prevent native pinch-zoom/pan on touch devices — the picker screen's
@@ -278,7 +276,7 @@
       </div>
       <button id="plan-toggle-btn">📍 Plan Route</button>
       <div id="plan-panel">
-        <div class="hint">Type real places for your start/end point, and add waypoints along the way — a bridge, a specific road, a landmark. The drive screen's minimap will guide you to each in order.</div>
+        <div class="hint">Type real places for your start/end point instead of clicking the map. The best route between them is found automatically and highlighted in green on the drive screen.</div>
         <div class="plan-row">
           <input id="start-place-input" type="text" placeholder="Start place (e.g. Golden Gate Bridge)">
           <button id="start-place-btn">Find</button>
@@ -287,11 +285,6 @@
           <input id="end-place-input" type="text" placeholder="End place">
           <button id="end-place-btn">Find</button>
         </div>
-        <div class="plan-row">
-          <input id="waypoint-input" type="text" placeholder="Add a waypoint">
-          <button id="waypoint-add-btn">Add</button>
-        </div>
-        <div id="waypoints-list"></div>
       </div>
     </div>
   </section>

@@ -219,8 +219,8 @@ export async function generateEndpoint(startLat, startLng, distanceKm) {
 }
 
 // Nominatim (OSM's free geocoder) — turns a typed place name into a real
-// point, for the picker's planning stage (type a start/end/waypoint by name
-// — "Golden Gate Bridge", "Suzuka Circuit" — instead of clicking the map).
+// point, for the picker's Plan Route panel (type a start/end point by name —
+// "Golden Gate Bridge", "Suzuka Circuit" — instead of clicking the map).
 // Takes only the single best match; good enough for a specific landmark or
 // road name, not meant to disambiguate a genuinely ambiguous query.
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
@@ -233,6 +233,46 @@ export async function geocodePlace(query) {
   if (!results.length) return null;
   const r = results[0];
   return { lat: Number(r.lat), lng: Number(r.lon), name: r.display_name.split(",")[0] };
+}
+
+// OSRM's free public routing demo — the actual best real-road route between
+// two points (not just a straight line), used to draw the green route
+// overlay (see drive.js) instead of the plain start->end dashed line. `mode`
+// on a step is "ferry" wherever the driving profile crosses open water via a
+// real car ferry — those coordinate ranges become the "boat" corridors (see
+// drive.js/main.js) since there's obviously no road there.
+const OSRM_URL = "https://router.project-osrm.org/route/v1/driving";
+
+export async function fetchRoute(startLat, startLng, endLat, endLng) {
+  const url = `${OSRM_URL}/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson&steps=true`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Route lookup responded ${res.status}`);
+  const data = await res.json();
+  if (data.code !== "Ok" || !data.routes || !data.routes.length) return null;
+
+  const route = data.routes[0];
+  const points = route.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
+  const ferrySegments = [];
+  for (const leg of route.legs || []) {
+    for (const step of leg.steps || []) {
+      if (step.mode === "ferry" && step.geometry?.coordinates?.length > 1) {
+        ferrySegments.push(step.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })));
+      }
+    }
+  }
+  return { points, ferrySegments, distanceKm: route.distance / 1000 };
+}
+
+// Long routes' full-resolution geometry can be many thousands of points —
+// far more detail than a minimap/overview guide line needs, and expensive to
+// redraw every frame. Thins it to at most `maxPoints`, keeping the first and
+// last point so the route still visibly starts/ends in the right place.
+export function simplifyRoute(points, maxPoints = 1500) {
+  if (points.length <= maxPoints) return points;
+  const step = Math.ceil(points.length / maxPoints);
+  const out = points.filter((_, i) => i % step === 0);
+  if (out[out.length - 1] !== points[points.length - 1]) out.push(points[points.length - 1]);
+  return out;
 }
 
 export { bboxAround };

@@ -85,6 +85,46 @@ function spriteFor(vehicleClass) {
     : { sprite: carSprite, baseRotation: CAR_SPRITE_BASE_ROTATION };
 }
 
+// Shortest distance from (px,py) to a polyline (array of {x,y}, at least 2
+// points) — used to tell how close the car is to a ferry crossing's route.
+function distToPolyline(px, py, points) {
+  let best = Infinity;
+  for (let i = 0; i < points.length - 1; i++) {
+    const x1 = points[i].x, y1 = points[i].y, x2 = points[i + 1].x, y2 = points[i + 1].y;
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// A simple procedural hull — no sprite for this since it's a rare, brief
+// state (crossing a ferry gap in the route) rather than a real vehicle
+// class, so a small vector shape is enough. Drawn with the same
+// translate+rotate the player's own sprite uses (heading, no base-rotation
+// twist needed since it's drawn nose-up already).
+function drawBoatShape(ctx, lenPx) {
+  const w = lenPx * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(0, -lenPx / 2);
+  ctx.quadraticCurveTo(w / 2, -lenPx / 4, w / 2, lenPx / 6);
+  ctx.lineTo(w / 2, lenPx / 2 - 3);
+  ctx.quadraticCurveTo(0, lenPx / 2 + 5, -w / 2, lenPx / 2 - 3);
+  ctx.lineTo(-w / 2, lenPx / 6);
+  ctx.quadraticCurveTo(-w / 2, -lenPx / 4, 0, -lenPx / 2);
+  ctx.closePath();
+  ctx.fillStyle = "#c97a2b";
+  ctx.strokeStyle = "#5a3a14";
+  ctx.lineWidth = 1.5;
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#6b8a9c";
+  ctx.fillRect(-w * 0.28, -lenPx * 0.06, w * 0.56, lenPx * 0.28);
+}
+
 const MINIMAP_MARGIN = 20;
 const MINIMAP_RADIUS_PX = 144;
 const MINIMAP_METERS = 600; // real-world radius shown on the minimap (4x zoomed out from the original 150m)
@@ -135,7 +175,7 @@ function readGamepadInput() {
   return { throttle: Math.max(-1, Math.min(1, throttle)), steer: Math.max(-1, Math.min(1, steer)), handbrake };
 }
 
-export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm, raceMode, waypoints = [] }, { onBack }) {
+export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, distanceKm, raceMode, routePoints, ferrySegments = [] }, { onBack }) {
   const isGp = !!(raceMode && raceMode.type === "gp");
   const canvas = document.getElementById("gamecanvas");
   const ctx = canvas.getContext("2d");
@@ -327,11 +367,14 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     return { lat: ll.lat, lng: ll.lng, heading: car.heading, speed: car.speed };
   });
 
-  // Waypoints (see picker.js's Plan Route panel): reached in order, purely a
-  // guide (never blocks finishing the race) — used for finding a specific
-  // bridge/road/landmark along the way rather than just the endpoint.
-  let nextWaypointIndex = 0;
-  const WAYPOINT_RADIUS_M = 25;
+  // Best-route overlay (see main.js's fetchRoute) — a real road route, not
+  // just a straight line, shown in green. `ferrySegments` are the sub-ranges
+  // of that route OSRM's driving profile crossed by boat (there's obviously
+  // no road across open water) — while the car is near one of those, it's
+  // treated as "on road" (no off-road penalty) and rendered as a boat
+  // instead of the player's vehicle (see inWaterCrossing below).
+  const FERRY_CORRIDOR_RADIUS_M = 60;
+  let inWaterCrossing = false;
 
   let raceStartTime = null;
   let finished = false;
@@ -871,7 +914,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.save();
       ctx.translate(carPt.sx, carPt.sy);
       const { sprite: playerSprite, baseRotation: playerBaseRotation } = spriteFor(vehicleClass);
-      if (playerSprite) {
+      if (inWaterCrossing) {
+        ctx.rotate(car.heading);
+        drawBoatShape(ctx, CAR_LENGTH_M * PX_PER_METER * 1.4);
+      } else if (playerSprite) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
         ctx.filter = SKIN_FILTERS[garage.skin] || "none";
@@ -954,6 +1000,20 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
         ctx.lineTo(b.mx, b.my);
         ctx.stroke();
       }
+
+      // The actual best real-road route (see main.js's fetchRoute), on top
+      // of the plain nearby-roads overlay above so it stands out as "this
+      // one" rather than just any road.
+      if (routePoints) {
+        ctx.strokeStyle = "rgba(53, 195, 122, 0.85)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        routePoints.forEach((p, i) => {
+          const mp = toMini(p.x, p.y);
+          if (i === 0) ctx.moveTo(mp.mx, mp.my); else ctx.lineTo(mp.mx, mp.my);
+        });
+        ctx.stroke();
+      }
     }
 
     for (const bot of bots) {
@@ -966,26 +1026,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       ctx.fill();
     }
 
-    // Waypoints beyond the immediate next one — shown so the whole planned
-    // route is visible, not just wherever you're headed right now.
-    for (let i = nextWaypointIndex + 1; i < waypoints.length; i++) {
-      const wp = waypoints[i];
-      if (Math.hypot(wp.x - car.x, wp.y - car.y) > MINIMAP_METERS) continue;
-      const p = toMini(wp.x, wp.y);
-      ctx.fillStyle = "#ffa726";
-      ctx.beginPath();
-      ctx.arc(p.mx, p.my, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // The current target: the next unvisited waypoint if any remain,
-    // otherwise the actual finish — the heading arrow always points at
-    // whichever this is, per the Plan Route feature (see picker.js).
-    const target = nextWaypointIndex < waypoints.length ? waypoints[nextWaypointIndex] : endLocal;
-    const dx = target.x - car.x, dy = target.y - car.y;
+    const dx = endLocal.x - car.x, dy = endLocal.y - car.y;
     const distToEnd = Math.hypot(dx, dy);
     if (distToEnd <= MINIMAP_METERS) {
-      const p = toMini(target.x, target.y);
+      const p = toMini(endLocal.x, endLocal.y);
       ctx.fillStyle = "#ef5350";
       ctx.beginPath();
       ctx.arc(p.mx, p.my, 5, 0, Math.PI * 2);
@@ -993,8 +1037,7 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     }
     ctx.restore();
 
-    // Waypoint blip: when the current target (next waypoint, or the finish
-    // once all waypoints are visited) is off the minimap, show an arrow
+    // Destination blip: when the finish is off the minimap, show an arrow
     // clamped to the rim pointing in its direction (GTA-style radar beacon).
     if (distToEnd > MINIMAP_METERS) {
       const angle = Math.atan2(dx, dy);
@@ -1048,8 +1091,8 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
     ctx.fillRect(0, 0, w, h);
 
     const pad = 60;
-    const xs = [0, endLocal.x, car.x, ...waypoints.map(w => w.x)];
-    const ys = [0, endLocal.y, car.y, ...waypoints.map(w => w.y)];
+    const xs = [0, endLocal.x, car.x, ...(routePoints || []).map(p => p.x)];
+    const ys = [0, endLocal.y, car.y, ...(routePoints || []).map(p => p.y)];
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
@@ -1071,36 +1114,32 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
 
     const s = toOverview(0, 0), e = toOverview(endLocal.x, endLocal.y), c = toOverview(car.x, car.y);
 
-    // Route line runs through every waypoint in order, not just start->end —
-    // this is the "next waypoint" the heading arrow points at, laid out on
-    // the wider view "M" gives you (see the Plan Route panel in picker.js).
-    const routePts = [{ x: 0, y: 0 }, ...waypoints, endLocal];
-    ctx.strokeStyle = "rgba(255,255,255,.5)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 8]);
-    ctx.beginPath();
-    routePts.forEach((p, i) => {
-      const sp = toOverview(p.x, p.y);
-      if (i === 0) ctx.moveTo(sp.sx, sp.sy); else ctx.lineTo(sp.sx, sp.sy);
-    });
-    ctx.stroke();
-    ctx.setLineDash([]);
+    // The actual best real-road route (see main.js's fetchRoute) in green if
+    // we have one, falling back to a plain dashed straight line if the route
+    // lookup failed/was skipped — same as before that feature existed.
+    if (routePoints) {
+      ctx.strokeStyle = "rgba(53, 195, 122, 0.85)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      routePoints.forEach((p, i) => {
+        const sp = toOverview(p.x, p.y);
+        if (i === 0) ctx.moveTo(sp.sx, sp.sy); else ctx.lineTo(sp.sx, sp.sy);
+      });
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = "rgba(255,255,255,.5)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 8]);
+      ctx.beginPath();
+      ctx.moveTo(s.sx, s.sy);
+      ctx.lineTo(e.sx, e.sy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     ctx.fillStyle = "#35c37a";
     ctx.beginPath(); ctx.arc(s.sx, s.sy, 8, 0, Math.PI * 2); ctx.fill();
-
-    waypoints.forEach((wp, i) => {
-      const p = toOverview(wp.x, wp.y);
-      const isNext = i === nextWaypointIndex;
-      const isPast = i < nextWaypointIndex;
-      ctx.fillStyle = isPast ? "rgba(255,255,255,.35)" : isNext ? "#ef5350" : "#ffa726";
-      ctx.beginPath(); ctx.arc(p.sx, p.sy, isNext ? 9 : 6, 0, Math.PI * 2); ctx.fill();
-    });
-
-    // The finish marker is the bright "current target" red only once every
-    // waypoint's been visited — otherwise it's dimmed, since the next
-    // waypoint (drawn above) is what you're actually headed toward.
-    ctx.fillStyle = nextWaypointIndex >= waypoints.length ? "#ef5350" : "rgba(239,83,80,.4)";
+    ctx.fillStyle = "#ef5350";
     ctx.beginPath(); ctx.arc(e.sx, e.sy, 8, 0, Math.PI * 2); ctx.fill();
 
     ctx.save();
@@ -1145,8 +1184,10 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
       // failed once (an Overpass mirror hiccup) actually get retried instead
       // of staying blank for the rest of the race (see roads.js).
       if (isGp) for (const p of raceMode.trackPoints) roadData.ensureLoaded(p.x, p.y);
+
+      inWaterCrossing = ferrySegments.some(seg => distToPolyline(car.x, car.y, seg) < FERRY_CORRIDOR_RADIUS_M);
       const distToRoad = roadData.distanceToNearestRoad(car.x, car.y);
-      offRoad = distToRoad > ROAD_HALF_WIDTH_M + OFFROAD_MARGIN_M;
+      offRoad = !inWaterCrossing && distToRoad > ROAD_HALF_WIDTH_M + OFFROAD_MARGIN_M;
 
       const prevX = car.x, prevY = car.y;
       stepCar(car, input, 1 / 60, !offRoad, vehicleClass);
@@ -1219,14 +1260,6 @@ export function startDrive({ roadData, car, endLocal, endLatLng, startLatLng, di
           collectables.splice(i, 1);
           collectProgressBadge.textContent = `${getCollectedIds().size} / 1000`;
           queueCollectToast(c);
-        }
-      }
-
-      if (nextWaypointIndex < waypoints.length) {
-        const wp = waypoints[nextWaypointIndex];
-        if (Math.hypot(car.x - wp.x, car.y - wp.y) < WAYPOINT_RADIUS_M) {
-          nextWaypointIndex++;
-          queueCollectToast({ icon: "📍", name: `Waypoint ${nextWaypointIndex} / ${waypoints.length}`, rarity: wp.name });
         }
       }
 
