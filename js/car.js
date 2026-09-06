@@ -2,7 +2,7 @@
 // in the same local meters space as roads.js. Heading 0 = facing +y (north).
 
 export const MAX_SPEED_ON_ROAD = 83.33; // m/s (300 km/h)
-export const MAX_SPEED_OFF_ROAD = 8.33; // m/s (30 km/h) — the "damage" slowdown
+export const MAX_SPEED_OFF_ROAD = 33.33; // m/s (120 km/h)
 const REVERSE_FRACTION = 0.4;
 const ACCEL_ON_ROAD = 37.5;            // m/s^2
 const ACCEL_OFF_ROAD = 5;
@@ -22,7 +22,7 @@ const TURN_RATE = 2.6;                 // rad/s at full steer and speed
 // or off the wheel. MAX_DRIFT_ANGLE caps how far that slip can build up so a
 // sustained hard drift settles into a steady slide instead of spinning out.
 const GRIP_RATE = 14;                          // rad/s, travel-direction catch-up rate at full grip
-const MAX_DRIFT_ANGLE = 65 * Math.PI / 180;    // cap on how far travel direction can lag facing direction
+const MAX_DRIFT_ANGLE = 32.5 * Math.PI / 180;  // cap on how far travel direction can lag facing direction (halved — "half the driftingness")
 // Drift intensity is scaled against a realistic cornering speed, NOT MAX_SPEED_ON_ROAD (300 km/h) —
 // scaling against the car's top speed made any normal 40-80 km/h corner only 15-25% "fast enough",
 // so the effect rounded down to nothing. 9 m/s (~32 km/h) is a speed you'd corner at in a normal
@@ -48,9 +48,16 @@ const OFFROAD_JITTER_RATE = 9; // rad/s scale of continuous random yaw noise whi
 // new art. Multipliers apply on top of the car/road-surface constants above.
 export const VEHICLE_CLASSES = {
   car: { label: "Car", speedMul: 1, accelMul: 1, turnMul: 1, spriteScale: 1 },
-  bike: { label: "Bike", speedMul: 1.05, accelMul: 1.35, turnMul: 1.5, spriteScale: 0.6 },
+  // accelMul 2.2 = 120% quicker off the line than the car (top speed left
+  // close to the car's — "quicker", not "faster").
+  bike: { label: "Bike", speedMul: 1.05, accelMul: 2.2, turnMul: 1.5, spriteScale: 0.6 },
   truck: { label: "Truck", speedMul: 0.72, accelMul: 0.55, turnMul: 0.65, spriteScale: 1.7 },
 };
+
+// Truck still exists only as tuned stats for later — it has no released
+// sprite/handling pass yet. Bike now has its own sprite (see drive.js) and
+// is live.
+export const RELEASED_VEHICLE_CLASSES = ["car", "bike"];
 
 const NITRO_ACCEL_MUL = 1.8;
 const NITRO_SPEED_MUL = 1.35;
