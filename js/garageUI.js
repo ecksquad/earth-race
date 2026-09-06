@@ -1,9 +1,10 @@
-// Garage modal: pick a vehicle class (car/bike/truck — same sprite,
-// different handling, see car.js's VEHICLE_CLASSES) and a skin (a CSS filter
-// applied to that same sprite — see drive.js's SKIN_FILTERS). Skins unlock
-// via achievements; locked ones show a lock and which achievement grants them.
+// Garage modal: pick a vehicle class (car/bike/truck, each with its own
+// handling — see car.js's VEHICLE_CLASSES; car and bike also have distinct
+// sprites, see drive.js) and a skin (a CSS filter applied on top of whichever
+// sprite — see drive.js's SKIN_FILTERS). Skins unlock via achievements;
+// locked ones show a lock and which achievement grants them.
 
-import { VEHICLE_CLASSES } from "./car.js";
+import { VEHICLE_CLASSES, RELEASED_VEHICLE_CLASSES } from "./car.js";
 import { getGarage, setGarage, getUnlockedAchievements } from "./storage.js";
 import { ACHIEVEMENTS } from "./achievements.js";
 
@@ -11,12 +12,6 @@ const SKIN_LABELS = {
   default: "Default", gold: "Gold", prismatic: "Prismatic",
   chrome: "Chrome", "matte-black": "Matte Black", flame: "Flame",
 };
-
-// Bike/truck exist as tuned handling profiles (see car.js's VEHICLE_CLASSES)
-// but aren't released yet — shown so people know they're coming, not
-// selectable so nobody's mid-race handling changes out from under them
-// later when they do actually ship.
-const RELEASED_VEHICLE_CLASSES = ["car"];
 
 export function initGarageUI() {
   const btn = document.getElementById("garage-btn");
